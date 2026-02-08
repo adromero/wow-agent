@@ -1,0 +1,10 @@
+## Interface: 11508, 20505, 50503, 120000
+## Title: WoW Agent
+## Notes: AI assistant game state exporter
+## Author: WoWAgent
+## Version: 1.0.0
+## SavedVariables: WoWAgentDB
+
+Utils.lua
+StateCollector.lua
+Core.lua

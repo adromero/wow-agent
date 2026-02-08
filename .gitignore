@@ -1,0 +1,23 @@
+# Dependencies
+app/node_modules/
+
+# Build output
+app/dist/
+
+# Electron packaged builds
+app/release/
+
+# Environment
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
