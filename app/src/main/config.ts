@@ -1,6 +1,7 @@
 import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
+import "dotenv/config";
 
 // --- Provider Registry ---
 
@@ -236,6 +237,15 @@ export function findAddOnsPath(folderName: string): string {
 
   return "";
 }
+/**
+ * Derive the Screenshots directory from the WTF path.
+ * WTF path:         .../World of Warcraft/_retail_/WTF
+ * Screenshots path: .../World of Warcraft/_retail_/Screenshots
+ */
+export function findScreenshotsPath(wtfPath: string): string | null {
+  const screenshotsDir = path.join(path.dirname(wtfPath), "Screenshots");
+  return fs.existsSync(screenshotsDir) ? screenshotsDir : null;
+}
 
 export function loadConfig(): AppConfig {
   const versionId = loadSelectedVersion();
@@ -247,8 +257,8 @@ export function loadConfig(): AppConfig {
     apiKey: process.env.ANTHROPIC_API_KEY || "",
     modelId: process.env.WOW_AGENT_MODEL || "claude-sonnet-4-5-20250929",
     window: {
-      width: 420,
-      height: 700,
+      width: 520,
+      height: 480,
       alwaysOnTop: true,
       opacity: 0.95,
     },

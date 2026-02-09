@@ -19,12 +19,21 @@ You help players with:
 
 You have access to the player's live game state (player info, current target, zone, party composition, gear level) via the get_game_state tool. This data may be slightly stale - it's updated when the player runs /agent sync in-game, which reloads their UI.
 
+You have a web_fetch tool to look up game information from wowhead.com. Use it to research zones, bosses, quests, items, and other game content when detailed or current information would help the player. When you receive a [Zone Update] message indicating the player has moved to a new zone, use web_fetch to look up the zone on wowhead and provide a concise summary of relevant content for the player's level and class.
+
 Guidelines:
 - Always consider the player's current context (class, level, zone, group) when giving advice
 - Be concise but thorough - players are often in the middle of gameplay
 - If the game state shows they're in a specific instance, prioritize advice relevant to that content
 - When discussing group composition, consider the roles and classes already present in their party
 - Use the game state tool proactively when it would help answer the question`;
+
+const WOWHEAD_BASE: Record<string, string> = {
+  retail: "https://www.wowhead.com",
+  tbc_anniversary: "https://www.wowhead.com/tbc",
+  mop_classic: "https://www.wowhead.com/mop",
+  classic_era: "https://www.wowhead.com/classic",
+};
 
 const VERSION_PROMPTS: Record<string, string> = {
   retail: `
@@ -35,7 +44,8 @@ This player is on WoW Retail.
 - Mythic+ affixes and rating system
 - Great Vault weekly reward system
 - Delves, follower dungeons, and other solo/small-group content
-- Modern class design with all specs available`,
+- Modern class design with all specs available
+- Wowhead: ${WOWHEAD_BASE.retail} (use for zone/boss/item/quest lookups, search via ${WOWHEAD_BASE.retail}/search?q=QUERY)`,
 
   tbc_anniversary: `
 This player is on TBC Classic Anniversary Edition (patch 2.5.5).
@@ -44,7 +54,8 @@ This player is on TBC Classic Anniversary Edition (patch 2.5.5).
 - Key raids: Karazhan, Gruul's Lair, Magtheridon's Lair, Serpentshrine Cavern, Tempest Keep, Mount Hyjal, Black Temple, Sunwell Plateau
 - Heroic dungeons require reputation-based keys; raids have attunement chains
 - Arena seasons and resilience gear are core PvP progression
-- Reference specific spell names, talent points, and boss abilities by their correct TBC-era names`,
+- Reference specific spell names, talent points, and boss abilities by their correct TBC-era names
+- Wowhead: ${WOWHEAD_BASE.tbc_anniversary} (use for zone/boss/item/quest lookups, search via ${WOWHEAD_BASE.tbc_anniversary}/search?q=QUERY)`,
 
   mop_classic: `
 This player is on Mists of Pandaria Classic.
@@ -54,7 +65,8 @@ This player is on Mists of Pandaria Classic.
 - Challenge Mode dungeons for cosmetic rewards (gold/silver/bronze)
 - Valor points for gear upgrades, Lesser Charms for bonus rolls
 - Pandaria factions and daily quest hubs for reputation gating
-- No flying until appropriate reputation is earned`,
+- No flying until appropriate reputation is earned
+- Wowhead: ${WOWHEAD_BASE.mop_classic} (use for zone/boss/item/quest lookups, search via ${WOWHEAD_BASE.mop_classic}/search?q=QUERY)`,
 
   classic_era: `
 This player is on Classic Era (Vanilla WoW).
@@ -65,7 +77,8 @@ This player is on Classic Era (Vanilla WoW).
 - No LFG/LFR systems - players form groups manually
 - Talent trees with 51-point builds
 - Original class design: only certain classes can tank/heal effectively
-- Attunement quests for many dungeons and raids`,
+- Attunement quests for many dungeons and raids
+- Wowhead: ${WOWHEAD_BASE.classic_era} (use for zone/boss/item/quest lookups, search via ${WOWHEAD_BASE.classic_era}/search?q=QUERY)`,
 };
 
 export function getSystemPrompt(versionId: string): string {
@@ -163,6 +176,23 @@ export function getProviderModels(providerId: string, providerConfig: ProviderCo
   } catch {
     return [];
   }
+export function getWowheadBase(versionId: string): string {
+  return WOWHEAD_BASE[versionId] || WOWHEAD_BASE.tbc_anniversary;
+}
+
+/**
+ * Build the auto-prompt sent to the agent when the player changes zones.
+ */
+export function formatZoneLookupPrompt(
+  db: WoWAgentDB | null,
+  previousZone: string,
+  newZone: string,
+  versionId: string,
+): string {
+  const gameContext = formatGameContext(db);
+  const wowhead = getWowheadBase(versionId);
+  const searchUrl = `${wowhead}/search?q=${encodeURIComponent(newZone)}`;
+  return `${gameContext}\n\n[Zone Update] The player moved from ${previousZone} to ${newZone}. Use web_fetch to look up this zone on wowhead (${searchUrl}) and share a brief overview — key content, level range, notable quests or dungeons, and any tips relevant to the player's class and level.`;
 }
 
 export function createAgent(

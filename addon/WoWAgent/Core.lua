@@ -33,6 +33,9 @@ local function HandleSlashCommand(msg)
 
     if msg == "sync" then
         DoSync()
+    elseif msg == "ss" then
+        Screenshot()
+        print("|cff00ff00[WoW Agent]|r Screenshot captured. It will appear in the WoW Agent app.")
     elseif msg == "status" then
         if WoWAgentDB and WoWAgentDB.last_sync > 0 then
             local ago = time() - WoWAgentDB.last_sync
@@ -49,6 +52,7 @@ local function HandleSlashCommand(msg)
     elseif msg == "help" or msg == "" then
         print("|cff00ff00[WoW Agent]|r Commands:")
         print("  |cffffff00/agent sync|r - Collect game state and reload UI to flush to disk")
+        print("  |cffffff00/agent ss|r - Take a screenshot and send it to the app")
         print("  |cffffff00/agent status|r - Show last sync time")
         print("  |cffffff00/agent help|r - Show this help message")
     else

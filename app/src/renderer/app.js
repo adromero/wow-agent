@@ -27,17 +27,28 @@ function renderMarkdown(text) {
 
   // Unordered lists
   html = html.replace(/^[*-] (.+)$/gm, "<li>$1</li>");
-  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, "<ul>$1</ul>");
+  html = html.replace(/((?:<li>.*<\/li>\s*)+)/g, "<ul>$1</ul>");
 
   // Ordered lists
   html = html.replace(/^\d+\. (.+)$/gm, "<li>$1</li>");
+  html = html.replace(/((?:<li>.*<\/li>\s*)+)/g, (match) => {
+    // Only wrap orphan <li> runs not already inside <ul>
+    if (!match.startsWith("<ul>")) return `<ol>${match}</ol>`;
+    return match;
+  });
+
+  // Collapse whitespace between list items so paragraph processing doesn't break lists
+  html = html.replace(/<\/li>\s+<li>/g, "</li><li>");
+  html = html.replace(/<\/li>\s+<\/(?:ul|ol)>/g, (m) => m.replace(/\s+/, ""));
 
   // Paragraphs (double newlines)
   html = html.replace(/\n\n/g, "</p><p>");
   html = `<p>${html}</p>`;
 
-  // Clean up empty paragraphs
+  // Clean up empty paragraphs and paragraphs wrapping block elements
   html = html.replace(/<p>\s*<\/p>/g, "");
+  html = html.replace(/<p>\s*(<(?:ul|ol|h[1-3]|pre|blockquote)[\s>])/g, "$1");
+  html = html.replace(/(<\/(?:ul|ol|h[1-3]|pre|blockquote)>)\s*<\/p>/g, "$1");
 
   // Single newlines to <br> within paragraphs
   html = html.replace(
@@ -70,6 +81,9 @@ const settingsOverlay = document.getElementById("settings-overlay");
 const settingsClose = document.getElementById("settings-close");
 const versionSelect = document.getElementById("version-select");
 const versionLabel = document.getElementById("version-label");
+const screenshotPreview = document.getElementById("screenshot-preview");
+const screenshotImg = document.getElementById("screenshot-img");
+const screenshotDismiss = document.getElementById("screenshot-dismiss");
 
 // Provider/auth DOM
 const providerSelect = document.getElementById("provider-select");
@@ -95,6 +109,7 @@ let providers = [];
 let currentConfig = null;
 
 let isStreaming = false;
+let pendingScreenshot = null;
 let currentStreamDiv = null;
 let currentStreamText = "";
 
@@ -102,7 +117,7 @@ function scrollToBottom() {
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
-function addMessage(role, content) {
+function addMessage(role, content, imagePath) {
   const msgDiv = document.createElement("div");
   msgDiv.className = `message ${role}`;
 
@@ -114,10 +129,19 @@ function addMessage(role, content) {
   const contentDiv = document.createElement("div");
   contentDiv.className = "message-content";
 
+  if (imagePath) {
+    const thumb = document.createElement("img");
+    thumb.className = "message-thumbnail";
+    thumb.src = `file://${imagePath}`;
+    contentDiv.appendChild(thumb);
+  }
+
   if (role === "assistant") {
     contentDiv.innerHTML = renderMarkdown(content);
   } else {
-    contentDiv.textContent = content;
+    const textNode = document.createElement("span");
+    textNode.textContent = content;
+    contentDiv.appendChild(textNode);
   }
 
   msgDiv.appendChild(roleLabel);
@@ -181,12 +205,19 @@ function sendMessage() {
   const text = messageInput.value.trim();
   if (!text || isStreaming) return;
 
-  addMessage("user", text);
+  const imagePath = pendingScreenshot;
+  addMessage("user", text, imagePath);
   messageInput.value = "";
   messageInput.style.height = "auto";
   setInputEnabled(false);
 
-  ipcRenderer.send("send-message", text);
+  if (imagePath) {
+    ipcRenderer.send("send-message", { text, imagePath });
+    pendingScreenshot = null;
+    screenshotPreview.classList.add("hidden");
+  } else {
+    ipcRenderer.send("send-message", { text });
+  }
 }
 
 function updateGameContextBar(data) {
@@ -505,11 +536,7 @@ ipcRenderer.on("agent-event", (_event, data) => {
       break;
 
     case "message_end":
-      // Full message complete, finalize rendering
-      if (currentStreamDiv && data.text) {
-        currentStreamDiv.innerHTML = renderMarkdown(data.text);
-        scrollToBottom();
-      }
+      // Streaming deltas already rendered the content; just finalize
       endStreamingMessage();
       break;
 
@@ -536,10 +563,29 @@ ipcRenderer.on("game-state-update", (_event, data) => {
   addMessage("system", "Game state updated from WoW.");
 });
 
+ipcRenderer.on("zone-lookup", (_event, data) => {
+  addMessage("system", `Zone changed: ${data.from} \u2192 ${data.to}. Looking up zone info...`);
+  setInputEnabled(false);
+});
+
 ipcRenderer.on("version-changed", (_event, data) => {
   versionLabel.textContent = data.label;
   versionSelect.value = data.id;
   addMessage("system", `Switched to ${data.label}. Conversation cleared.`);
+});
+
+// --- Screenshot handling ---
+
+ipcRenderer.on("screenshot-captured", (_event, data) => {
+  pendingScreenshot = data.filePath;
+  screenshotImg.src = `file://${data.filePath}`;
+  screenshotPreview.classList.remove("hidden");
+  scrollToBottom();
+});
+
+screenshotDismiss.addEventListener("click", () => {
+  pendingScreenshot = null;
+  screenshotPreview.classList.add("hidden");
 });
 
 // --- Input Handling ---

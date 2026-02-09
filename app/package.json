@@ -6,7 +6,7 @@
   "main": "dist/main/index.js",
   "scripts": {
     "build:main": "tsc",
-    "build:renderer": "cp -r src/renderer dist/renderer",
+    "build:renderer": "rm -rf dist/renderer && cp -r src/renderer dist/renderer",
     "build": "npm run build:main && npm run build:renderer",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron .",
@@ -47,6 +47,7 @@
   "dependencies": {
     "@mariozechner/pi-agent-core": "^0.52.0",
     "@mariozechner/pi-ai": "^0.52.0",
+    "dotenv": "^17.2.4",
     "luaparse": "^0.3.1"
   },
   "devDependencies": {

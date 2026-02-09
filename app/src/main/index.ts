@@ -20,18 +20,28 @@ import {
   clearProviderAuth,
   type ProviderConfig,
   type OAuthCredentials,
+  findScreenshotsPath,
 } from "./config.js";
-import { FileWatcher } from "./file-watcher.js";
-import { createAgent, formatGameContext, getProviderModels } from "./agent.js";
 import { getOAuthProvider, type OAuthAuthInfo, type OAuthPrompt } from "@mariozechner/pi-ai";
+import { FileWatcher } from "./file-watcher.js";
+import { ScreenshotWatcher } from "./screenshot-watcher.js";
+import {
+  createAgent,
+  formatGameContext,
+  formatZoneLookupPrompt,
+  getProviderModels,
+} from "./agent.js";
 import type { Agent } from "@mariozechner/pi-agent-core";
 import type { WoWAgentDB } from "./lua-reader.js";
 
 let mainWindow: BrowserWindow | null = null;
 let fileWatcher: FileWatcher | null = null;
+let screenshotWatcher: ScreenshotWatcher | null = null;
 let agent: Agent | null = null;
 let currentVersionId: string = loadSelectedVersion();
 let currentProviderConfig: ProviderConfig | null = loadProviderConfig();
+let lastZoneName: string | null = null;
+let isAgentBusy = false;
 
 function createWindow(): BrowserWindow {
   const config = loadConfig();
@@ -57,29 +67,61 @@ function createWindow(): BrowserWindow {
 }
 
 function setupIPC(): void {
-  // User sends a chat message
-  ipcMain.on("send-message", async (_event, message: string) => {
-    if (!agent || !mainWindow) return;
+  // User sends a chat message (with optional screenshot)
+  ipcMain.on(
+    "send-message",
+    async (
+      _event,
+      payload: string | { text: string; imagePath?: string },
+    ) => {
+      if (!agent || !mainWindow) return;
 
-    try {
-      // Include game context with the user message
-      const gameContext = formatGameContext(
-        fileWatcher?.getLastData() || null,
-      );
-      const fullMessage = gameContext
-        ? `${gameContext}\n\n${message}`
-        : message;
+      const text = typeof payload === "string" ? payload : payload.text;
+      const imagePath =
+        typeof payload === "string" ? undefined : payload.imagePath;
 
-      await agent.prompt(fullMessage);
-    } catch (err: any) {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("agent-event", {
-          type: "error",
-          message: err.message || "Unknown error",
-        });
+      try {
+        // Include game context with the user message
+        const gameContext = formatGameContext(
+          fileWatcher?.getLastData() || null,
+        );
+        const fullMessage = gameContext
+          ? `${gameContext}\n\n${text}`
+          : text;
+
+        isAgentBusy = true;
+        try {
+          if (imagePath && fs.existsSync(imagePath)) {
+            const imageBuffer = fs.readFileSync(imagePath);
+            const base64 = imageBuffer.toString("base64");
+            const ext = path.extname(imagePath).toLowerCase();
+            const mimeMap: Record<string, string> = {
+              ".jpg": "image/jpeg",
+              ".jpeg": "image/jpeg",
+              ".png": "image/png",
+              ".tga": "image/png", // TGA not natively supported, but fallback
+            };
+            const mimeType = mimeMap[ext] || "image/jpeg";
+
+            await agent.prompt(fullMessage, [
+              { type: "image", data: base64, mimeType },
+            ]);
+          } else {
+            await agent.prompt(fullMessage);
+          }
+        } finally {
+          isAgentBusy = false;
+        }
+      } catch (err: any) {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("agent-event", {
+            type: "error",
+            message: err.message || "Unknown error",
+          });
+        }
       }
-    }
-  });
+    },
+  );
 
   // Request current game state
   ipcMain.handle("get-game-state", () => {
@@ -122,11 +164,17 @@ function setupIPC(): void {
 
     currentVersionId = versionId;
     saveSelectedVersion(versionId);
+    lastZoneName = null; // Reset so first sync in new version doesn't trigger lookup
 
     // Restart file watcher with new WTF path
     fileWatcher?.stop();
     fileWatcher = null;
     setupFileWatcher();
+
+    // Restart screenshot watcher
+    screenshotWatcher?.stop();
+    screenshotWatcher = null;
+    setupScreenshotWatcher();
 
     // Recreate agent with new system prompt
     setupAgent();
@@ -331,6 +379,45 @@ function setupFileWatcher(): void {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("game-state-update", data);
     }
+
+    // Detect zone changes and auto-prompt the agent
+    const zone = data.game_state?.zone;
+    const newZone =
+      zone && zone.instance_type !== "none" ? zone.instance_name : zone?.name;
+
+    if (newZone && newZone !== lastZoneName) {
+      const previousZone = lastZoneName;
+      lastZoneName = newZone;
+
+      // Only auto-prompt if this isn't the initial sync and agent is free
+      if (previousZone !== null && agent && !isAgentBusy) {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("zone-lookup", {
+            from: previousZone,
+            to: newZone,
+          });
+        }
+
+        const prompt = formatZoneLookupPrompt(
+          data,
+          previousZone,
+          newZone,
+          currentVersionId,
+        );
+        isAgentBusy = true;
+        agent.prompt(prompt).catch((err) => {
+          console.error("[main] Zone lookup prompt failed:", err);
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send("agent-event", {
+              type: "error",
+              message: `Zone lookup failed: ${err.message}`,
+            });
+          }
+        }).finally(() => {
+          isAgentBusy = false;
+        });
+      }
+    }
   });
 
   fileWatcher.on("error", (err: Error) => {
@@ -338,6 +425,30 @@ function setupFileWatcher(): void {
   });
 
   fileWatcher.start();
+}
+
+function setupScreenshotWatcher(): void {
+  const version = getWowVersion(currentVersionId);
+  const wtfPath =
+    process.env.WOW_WTF_PATH ||
+    (version ? findSavedVariablesPath(version.folderName) : "");
+
+  if (!wtfPath) return;
+
+  // Version folder is the parent of the WTF directory
+  const versionFolderPath = path.dirname(wtfPath);
+  screenshotWatcher = new ScreenshotWatcher(versionFolderPath);
+
+  screenshotWatcher.on("screenshot", (data: { filePath: string }) => {
+    console.log("[main] Screenshot detected:", data.filePath);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("screenshot-captured", {
+        filePath: data.filePath,
+      });
+    }
+  });
+
+  screenshotWatcher.start();
 }
 
 function setupAgent(): void {
@@ -355,16 +466,19 @@ app.whenReady().then(() => {
 
   setupIPC();
   setupFileWatcher();
+  setupScreenshotWatcher();
   setupAgent();
 
   mainWindow.on("closed", () => {
     mainWindow = null;
     fileWatcher?.stop();
+    screenshotWatcher?.stop();
   });
 });
 
 app.on("window-all-closed", () => {
   fileWatcher?.stop();
+  screenshotWatcher?.stop();
   app.quit();
 });
 

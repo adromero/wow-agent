@@ -20,7 +20,7 @@ ADDON_SRC="$SCRIPT_DIR/addon/WoWAgent"
 version_to_folder() {
     case "$1" in
         retail)           echo "_retail_" ;;
-        tbc|tbc_anniversary|classic_tbc) echo "_classic_" ;;
+        tbc|tbc_anniversary|classic_tbc) echo "_anniversary_" ;;
         mop|mop_classic)  echo "_classic_" ;;
         classic|classic_era) echo "_classic_era_" ;;
         *)                echo "" ;;
@@ -85,7 +85,7 @@ if [ -n "$1" ]; then
     fi
 fi
 
-ALL_FOLDERS="_retail_ _classic_ _classic_era_"
+ALL_FOLDERS="_retail_ _classic_ _classic_era_ _anniversary_"
 if [ -n "$FILTER_FOLDER" ]; then
     ALL_FOLDERS="$FILTER_FOLDER"
 fi
