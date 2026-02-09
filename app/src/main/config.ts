@@ -163,8 +163,8 @@ export function loadConfig(): AppConfig {
     apiKey: process.env.ANTHROPIC_API_KEY || "",
     modelId: process.env.WOW_AGENT_MODEL || "claude-sonnet-4-5-20250929",
     window: {
-      width: 420,
-      height: 700,
+      width: 520,
+      height: 480,
       alwaysOnTop: true,
       opacity: 0.95,
     },

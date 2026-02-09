@@ -298,7 +298,7 @@ html, body {
 
 /* Markdown rendering */
 .message-content p {
-  margin: 4px 0;
+  margin: 2px 0;
 }
 
 .message-content p:first-child {
@@ -334,12 +334,12 @@ html, body {
 }
 
 .message-content ul, .message-content ol {
-  padding-left: 20px;
-  margin: 4px 0;
+  padding-left: 18px;
+  margin: 2px 0;
 }
 
 .message-content li {
-  margin: 2px 0;
+  margin: 1px 0;
 }
 
 .message-content strong {
@@ -348,7 +348,7 @@ html, body {
 
 .message-content h1, .message-content h2, .message-content h3 {
   color: var(--text-gold);
-  margin: 8px 0 4px;
+  margin: 4px 0 2px;
 }
 
 .message-content h1 { font-size: 16px; }

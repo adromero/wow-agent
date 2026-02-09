@@ -27,7 +27,7 @@ function renderMarkdown(text) {
 
   // Unordered lists
   html = html.replace(/^[*-] (.+)$/gm, "<li>$1</li>");
-  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, "<ul>$1</ul>");
+  html = html.replace(/((?:<li>.*<\/li>\s*)+)/g, "<ul>$1</ul>");
 
   // Ordered lists
   html = html.replace(/^\d+\. (.+)$/gm, "<li>$1</li>");
@@ -36,8 +36,10 @@ function renderMarkdown(text) {
   html = html.replace(/\n\n/g, "</p><p>");
   html = `<p>${html}</p>`;
 
-  // Clean up empty paragraphs
+  // Clean up empty paragraphs and paragraphs wrapping block elements
   html = html.replace(/<p>\s*<\/p>/g, "");
+  html = html.replace(/<p>\s*(<(?:ul|ol|h[1-3]|pre|blockquote)[\s>])/g, "$1");
+  html = html.replace(/(<\/(?:ul|ol|h[1-3]|pre|blockquote)>)\s*<\/p>/g, "$1");
 
   // Single newlines to <br> within paragraphs
   html = html.replace(
@@ -274,11 +276,7 @@ ipcRenderer.on("agent-event", (_event, data) => {
       break;
 
     case "message_end":
-      // Full message complete, finalize rendering
-      if (currentStreamDiv && data.text) {
-        currentStreamDiv.innerHTML = renderMarkdown(data.text);
-        scrollToBottom();
-      }
+      // Streaming deltas already rendered the content; just finalize
       endStreamingMessage();
       break;
 
