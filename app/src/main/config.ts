@@ -143,6 +143,16 @@ export function findSavedVariablesFile(wtfPath: string): string | null {
   return null;
 }
 
+/**
+ * Derive the Screenshots directory from the WTF path.
+ * WTF path:         .../World of Warcraft/_retail_/WTF
+ * Screenshots path: .../World of Warcraft/_retail_/Screenshots
+ */
+export function findScreenshotsPath(wtfPath: string): string | null {
+  const screenshotsDir = path.join(path.dirname(wtfPath), "Screenshots");
+  return fs.existsSync(screenshotsDir) ? screenshotsDir : null;
+}
+
 export function loadConfig(): AppConfig {
   const versionId = loadSelectedVersion();
   const version = getWowVersion(versionId) || WOW_VERSIONS[1];

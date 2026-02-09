@@ -70,8 +70,12 @@ const settingsOverlay = document.getElementById("settings-overlay");
 const settingsClose = document.getElementById("settings-close");
 const versionSelect = document.getElementById("version-select");
 const versionLabel = document.getElementById("version-label");
+const screenshotPreview = document.getElementById("screenshot-preview");
+const screenshotImg = document.getElementById("screenshot-img");
+const screenshotDismiss = document.getElementById("screenshot-dismiss");
 
 let isStreaming = false;
+let pendingScreenshot = null;
 let currentStreamDiv = null;
 let currentStreamText = "";
 
@@ -79,7 +83,7 @@ function scrollToBottom() {
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
-function addMessage(role, content) {
+function addMessage(role, content, imagePath) {
   const msgDiv = document.createElement("div");
   msgDiv.className = `message ${role}`;
 
@@ -91,10 +95,19 @@ function addMessage(role, content) {
   const contentDiv = document.createElement("div");
   contentDiv.className = "message-content";
 
+  if (imagePath) {
+    const thumb = document.createElement("img");
+    thumb.className = "message-thumbnail";
+    thumb.src = `file://${imagePath}`;
+    contentDiv.appendChild(thumb);
+  }
+
   if (role === "assistant") {
     contentDiv.innerHTML = renderMarkdown(content);
   } else {
-    contentDiv.textContent = content;
+    const textNode = document.createElement("span");
+    textNode.textContent = content;
+    contentDiv.appendChild(textNode);
   }
 
   msgDiv.appendChild(roleLabel);
@@ -158,12 +171,19 @@ function sendMessage() {
   const text = messageInput.value.trim();
   if (!text || isStreaming) return;
 
-  addMessage("user", text);
+  const imagePath = pendingScreenshot;
+  addMessage("user", text, imagePath);
   messageInput.value = "";
   messageInput.style.height = "auto";
   setInputEnabled(false);
 
-  ipcRenderer.send("send-message", text);
+  if (imagePath) {
+    ipcRenderer.send("send-message", { text, imagePath });
+    pendingScreenshot = null;
+    screenshotPreview.classList.add("hidden");
+  } else {
+    ipcRenderer.send("send-message", { text });
+  }
 }
 
 function updateGameContextBar(data) {
@@ -289,6 +309,20 @@ ipcRenderer.on("version-changed", (_event, data) => {
   versionLabel.textContent = data.label;
   versionSelect.value = data.id;
   addMessage("system", `Switched to ${data.label}. Conversation cleared.`);
+});
+
+// --- Screenshot handling ---
+
+ipcRenderer.on("screenshot-captured", (_event, data) => {
+  pendingScreenshot = data.filePath;
+  screenshotImg.src = `file://${data.filePath}`;
+  screenshotPreview.classList.remove("hidden");
+  scrollToBottom();
+});
+
+screenshotDismiss.addEventListener("click", () => {
+  pendingScreenshot = null;
+  screenshotPreview.classList.add("hidden");
 });
 
 // --- Input Handling ---
