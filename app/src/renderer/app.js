@@ -31,6 +31,15 @@ function renderMarkdown(text) {
 
   // Ordered lists
   html = html.replace(/^\d+\. (.+)$/gm, "<li>$1</li>");
+  html = html.replace(/((?:<li>.*<\/li>\s*)+)/g, (match) => {
+    // Only wrap orphan <li> runs not already inside <ul>
+    if (!match.startsWith("<ul>")) return `<ol>${match}</ol>`;
+    return match;
+  });
+
+  // Collapse whitespace between list items so paragraph processing doesn't break lists
+  html = html.replace(/<\/li>\s+<li>/g, "</li><li>");
+  html = html.replace(/<\/li>\s+<\/(?:ul|ol)>/g, (m) => m.replace(/\s+/, ""));
 
   // Paragraphs (double newlines)
   html = html.replace(/\n\n/g, "</p><p>");
@@ -301,6 +310,11 @@ ipcRenderer.on("game-state-update", (_event, data) => {
   updateGameContextBar(data);
   updateSyncStatus(data);
   addMessage("system", "Game state updated from WoW.");
+});
+
+ipcRenderer.on("zone-lookup", (_event, data) => {
+  addMessage("system", `Zone changed: ${data.from} \u2192 ${data.to}. Looking up zone info...`);
+  setInputEnabled(false);
 });
 
 ipcRenderer.on("version-changed", (_event, data) => {

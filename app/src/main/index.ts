@@ -16,7 +16,11 @@ import {
 } from "./config.js";
 import { FileWatcher } from "./file-watcher.js";
 import { ScreenshotWatcher } from "./screenshot-watcher.js";
-import { createAgent, formatGameContext } from "./agent.js";
+import {
+  createAgent,
+  formatGameContext,
+  formatZoneLookupPrompt,
+} from "./agent.js";
 import type { Agent } from "@mariozechner/pi-agent-core";
 import type { WoWAgentDB } from "./lua-reader.js";
 
@@ -25,6 +29,8 @@ let fileWatcher: FileWatcher | null = null;
 let screenshotWatcher: ScreenshotWatcher | null = null;
 let agent: Agent | null = null;
 let currentVersionId: string = loadSelectedVersion();
+let lastZoneName: string | null = null;
+let isAgentBusy = false;
 
 function createWindow(): BrowserWindow {
   const config = loadConfig();
@@ -72,23 +78,28 @@ function setupIPC(): void {
           ? `${gameContext}\n\n${text}`
           : text;
 
-        if (imagePath && fs.existsSync(imagePath)) {
-          const imageBuffer = fs.readFileSync(imagePath);
-          const base64 = imageBuffer.toString("base64");
-          const ext = path.extname(imagePath).toLowerCase();
-          const mimeMap: Record<string, string> = {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".tga": "image/png", // TGA not natively supported, but fallback
-          };
-          const mimeType = mimeMap[ext] || "image/jpeg";
+        isAgentBusy = true;
+        try {
+          if (imagePath && fs.existsSync(imagePath)) {
+            const imageBuffer = fs.readFileSync(imagePath);
+            const base64 = imageBuffer.toString("base64");
+            const ext = path.extname(imagePath).toLowerCase();
+            const mimeMap: Record<string, string> = {
+              ".jpg": "image/jpeg",
+              ".jpeg": "image/jpeg",
+              ".png": "image/png",
+              ".tga": "image/png", // TGA not natively supported, but fallback
+            };
+            const mimeType = mimeMap[ext] || "image/jpeg";
 
-          await agent.prompt(fullMessage, [
-            { type: "image", data: base64, mimeType },
-          ]);
-        } else {
-          await agent.prompt(fullMessage);
+            await agent.prompt(fullMessage, [
+              { type: "image", data: base64, mimeType },
+            ]);
+          } else {
+            await agent.prompt(fullMessage);
+          }
+        } finally {
+          isAgentBusy = false;
         }
       } catch (err: any) {
         if (mainWindow && !mainWindow.isDestroyed()) {
@@ -142,6 +153,7 @@ function setupIPC(): void {
 
     currentVersionId = versionId;
     saveSelectedVersion(versionId);
+    lastZoneName = null; // Reset so first sync in new version doesn't trigger lookup
 
     // Restart file watcher with new WTF path
     fileWatcher?.stop();
@@ -186,6 +198,45 @@ function setupFileWatcher(): void {
     console.log("[main] Game state updated from SavedVariables");
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("game-state-update", data);
+    }
+
+    // Detect zone changes and auto-prompt the agent
+    const zone = data.game_state?.zone;
+    const newZone =
+      zone && zone.instance_type !== "none" ? zone.instance_name : zone?.name;
+
+    if (newZone && newZone !== lastZoneName) {
+      const previousZone = lastZoneName;
+      lastZoneName = newZone;
+
+      // Only auto-prompt if this isn't the initial sync and agent is free
+      if (previousZone !== null && agent && !isAgentBusy) {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("zone-lookup", {
+            from: previousZone,
+            to: newZone,
+          });
+        }
+
+        const prompt = formatZoneLookupPrompt(
+          data,
+          previousZone,
+          newZone,
+          currentVersionId,
+        );
+        isAgentBusy = true;
+        agent.prompt(prompt).catch((err) => {
+          console.error("[main] Zone lookup prompt failed:", err);
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send("agent-event", {
+              type: "error",
+              message: `Zone lookup failed: ${err.message}`,
+            });
+          }
+        }).finally(() => {
+          isAgentBusy = false;
+        });
+      }
     }
   });
 
