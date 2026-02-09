@@ -1,8 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import { EventEmitter } from "events";
-import { readGameState, type WoWAgentDB } from "./lua-reader";
-import { findSavedVariablesFile } from "./config";
+import { readGameState, type WoWAgentDB } from "./lua-reader.js";
+import { findSavedVariablesFile } from "./config.js";
 
 export class FileWatcher extends EventEmitter {
   private watcher: fs.FSWatcher | null = null;

@@ -40,8 +40,66 @@
           <button id="settings-close" title="Close">&times;</button>
         </div>
         <div id="settings-body">
-          <label for="version-select">WoW Version</label>
-          <select id="version-select"></select>
+          <!-- AI Provider -->
+          <div class="settings-section">
+            <label for="provider-select">AI Provider</label>
+            <select id="provider-select"></select>
+          </div>
+
+          <!-- Authentication -->
+          <div class="settings-section" id="auth-section">
+            <label>Authentication</label>
+            <div id="auth-apikey" class="hidden">
+              <div class="input-row">
+                <input type="password" id="api-key-input" placeholder="Paste API key...">
+                <button id="save-apikey-btn" class="settings-btn">Save</button>
+              </div>
+              <div id="apikey-status" class="auth-status"></div>
+            </div>
+            <div id="auth-oauth" class="hidden">
+              <div id="oauth-not-connected">
+                <button id="oauth-login-btn" class="settings-btn">Login</button>
+              </div>
+              <div id="oauth-connected" class="hidden">
+                <span class="auth-status connected">Connected</span>
+                <button id="oauth-logout-btn" class="settings-btn danger">Logout</button>
+              </div>
+              <div id="oauth-flow" class="hidden">
+                <div id="oauth-flow-text"></div>
+                <div id="oauth-code-section" class="hidden">
+                  <div class="input-row">
+                    <input type="text" id="oauth-code-input" placeholder="Paste code here...">
+                    <button id="oauth-code-submit" class="settings-btn">Submit</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Model -->
+          <div class="settings-section">
+            <label for="model-select">Model</label>
+            <select id="model-select">
+              <option value="">Select a provider first</option>
+            </select>
+          </div>
+
+          <div class="settings-divider"></div>
+
+          <!-- WoW Version -->
+          <div class="settings-section">
+            <label for="version-select">WoW Version</label>
+            <select id="version-select"></select>
+          </div>
+
+          <!-- Addon Install -->
+          <div class="settings-section">
+            <label>WoW Addon</label>
+            <div id="addon-section">
+              <span id="addon-status" class="auth-status">Checking...</span>
+              <button id="addon-install-btn" class="settings-btn">Install Addon</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

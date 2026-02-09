@@ -2,6 +2,41 @@ import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
 
+// --- Provider Registry ---
+
+export interface OAuthCredentials {
+  refresh: string;
+  access: string;
+  expires: number;
+  [key: string]: unknown;
+}
+
+export interface ProviderConfig {
+  providerId: string;
+  authMethod: "api-key" | "oauth";
+  apiKey?: string;
+  oauthCredentials?: OAuthCredentials;
+  modelId?: string;
+}
+
+export interface ProviderInfo {
+  id: string;
+  label: string;
+  authMethods: ("api-key" | "oauth")[];
+  defaultModel: string;
+}
+
+export const PROVIDERS: ProviderInfo[] = [
+  { id: "anthropic", label: "Anthropic", authMethods: ["api-key", "oauth"], defaultModel: "claude-sonnet-4-5-20250929" },
+  { id: "openai", label: "OpenAI", authMethods: ["api-key"], defaultModel: "gpt-4o" },
+  { id: "openai-codex", label: "OpenAI Codex (ChatGPT Plus)", authMethods: ["oauth"], defaultModel: "codex-mini-latest" },
+  { id: "github-copilot", label: "GitHub Copilot", authMethods: ["oauth"], defaultModel: "claude-sonnet-4-5-20250929" },
+];
+
+export function getProvider(id: string): ProviderInfo | undefined {
+  return PROVIDERS.find((p) => p.id === id);
+}
+
 // --- WoW Version Registry ---
 
 export interface WowVersion {
@@ -31,6 +66,7 @@ const SETTINGS_FILE = path.join(SETTINGS_DIR, "settings.json");
 
 interface Settings {
   wowVersion: string;
+  provider?: ProviderConfig;
 }
 
 function readSettings(): Settings {
@@ -140,6 +176,65 @@ export function findSavedVariablesFile(wtfPath: string): string | null {
   }
 
   return null;
+}
+
+export function loadProviderConfig(): ProviderConfig | null {
+  const settings = readSettings();
+  return settings.provider || null;
+}
+
+export function saveProviderConfig(config: ProviderConfig): void {
+  const settings = readSettings();
+  settings.provider = config;
+  writeSettings(settings);
+}
+
+export function updateOAuthCredentials(credentials: OAuthCredentials): void {
+  const settings = readSettings();
+  if (settings.provider) {
+    settings.provider.oauthCredentials = credentials;
+    writeSettings(settings);
+  }
+}
+
+export function clearProviderAuth(): void {
+  const settings = readSettings();
+  if (settings.provider) {
+    delete settings.provider.apiKey;
+    delete settings.provider.oauthCredentials;
+    settings.provider.authMethod = "api-key";
+    writeSettings(settings);
+  }
+}
+
+// --- AddOns Path ---
+
+export function findAddOnsPath(folderName: string): string {
+  const platform = os.platform();
+  const home = os.homedir();
+
+  const candidates: string[] = [];
+
+  if (platform === "darwin") {
+    candidates.push(
+      path.join(home, `Applications/World of Warcraft/${folderName}/Interface/AddOns`),
+      `/Applications/World of Warcraft/${folderName}/Interface/AddOns`,
+    );
+  } else if (platform === "win32") {
+    candidates.push(
+      `C:\\Program Files (x86)\\World of Warcraft\\${folderName}\\Interface\\AddOns`,
+      `C:\\Program Files\\World of Warcraft\\${folderName}\\Interface\\AddOns`,
+      path.join(home, `Games\\World of Warcraft\\${folderName}\\Interface\\AddOns`),
+    );
+  }
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return "";
 }
 
 export function loadConfig(): AppConfig {

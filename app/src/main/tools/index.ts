@@ -1,6 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { WoWAgentDB } from "../lua-reader";
-import { createGameStateTool } from "./game-state";
+import type { WoWAgentDB } from "../lua-reader.js";
+import { createGameStateTool } from "./game-state.js";
 
 export function createTools(
   getGameState: () => WoWAgentDB | null,
