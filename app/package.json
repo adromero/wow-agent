@@ -2,6 +2,7 @@
   "name": "wow-agent",
   "version": "1.0.0",
   "description": "AI Assistant for World of Warcraft Classic",
+  "type": "module",
   "main": "dist/main/index.js",
   "scripts": {
     "build:main": "tsc",
@@ -15,6 +16,7 @@
   "dependencies": {
     "@mariozechner/pi-agent-core": "^0.52.0",
     "@mariozechner/pi-ai": "^0.52.0",
+    "dotenv": "^17.2.4",
     "luaparse": "^0.3.1"
   },
   "devDependencies": {

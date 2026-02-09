@@ -1,8 +1,8 @@
 import { Agent, type AgentEvent } from "@mariozechner/pi-agent-core";
 import { getModel, getEnvApiKey } from "@mariozechner/pi-ai";
 import type { BrowserWindow } from "electron";
-import type { WoWAgentDB, GameState } from "./lua-reader";
-import { createTools } from "./tools";
+import type { WoWAgentDB, GameState } from "./lua-reader.js";
+import { createTools } from "./tools/index.js";
 
 const COMMON_PREAMBLE = `You are WoW Agent, an expert AI assistant for World of Warcraft.
 

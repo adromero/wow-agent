@@ -1,5 +1,9 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import * as path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 import {
   loadConfig,
   WOW_VERSIONS,
@@ -7,11 +11,11 @@ import {
   loadSelectedVersion,
   saveSelectedVersion,
   findSavedVariablesPath,
-} from "./config";
-import { FileWatcher } from "./file-watcher";
-import { createAgent, formatGameContext } from "./agent";
+} from "./config.js";
+import { FileWatcher } from "./file-watcher.js";
+import { createAgent, formatGameContext } from "./agent.js";
 import type { Agent } from "@mariozechner/pi-agent-core";
-import type { WoWAgentDB } from "./lua-reader";
+import type { WoWAgentDB } from "./lua-reader.js";
 
 let mainWindow: BrowserWindow | null = null;
 let fileWatcher: FileWatcher | null = null;

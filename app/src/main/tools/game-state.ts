@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { WoWAgentDB, GameState } from "../lua-reader";
+import type { WoWAgentDB, GameState } from "../lua-reader.js";
 
 const gameStateSchema = Type.Object({
   section: Type.Optional(
