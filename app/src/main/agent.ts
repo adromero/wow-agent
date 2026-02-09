@@ -176,6 +176,8 @@ export function getProviderModels(providerId: string, providerConfig: ProviderCo
   } catch {
     return [];
   }
+}
+
 export function getWowheadBase(versionId: string): string {
   return WOWHEAD_BASE[versionId] || WOWHEAD_BASE.tbc_anniversary;
 }
