@@ -1,7 +1,7 @@
 {
   "name": "wow-agent",
   "version": "1.0.0",
-  "description": "AI Assistant for World of Warcraft Classic",
+  "description": "AI Assistant for World of Warcraft",
   "type": "module",
   "main": "dist/main/index.js",
   "scripts": {
@@ -12,6 +12,37 @@
     "dev": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder"
+  },
+  "build": {
+    "appId": "com.wowagent.app",
+    "productName": "WoW Agent",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../addon/WoWAgent",
+        "to": "addon/WoWAgent"
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.utilities"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "dependencies": {
     "@mariozechner/pi-agent-core": "^0.52.0",

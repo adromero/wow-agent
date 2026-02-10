@@ -1,8 +1,10 @@
 import { Agent, type AgentEvent } from "@mariozechner/pi-agent-core";
-import { getModel, getEnvApiKey } from "@mariozechner/pi-ai";
+import { getModel, getModels, getEnvApiKey, getOAuthProvider } from "@mariozechner/pi-ai";
 import type { BrowserWindow } from "electron";
 import type { WoWAgentDB, GameState } from "./lua-reader.js";
 import { createTools } from "./tools/index.js";
+import type { ProviderConfig, OAuthCredentials } from "./config.js";
+import { updateOAuthCredentials } from "./config.js";
 
 const COMMON_PREAMBLE = `You are WoW Agent, an expert AI assistant for World of Warcraft.
 
@@ -84,6 +86,98 @@ export function getSystemPrompt(versionId: string): string {
   return COMMON_PREAMBLE + "\n" + versionSection;
 }
 
+function resolveModel(providerConfig: ProviderConfig | null) {
+  // If we have a provider config, use it
+  if (providerConfig) {
+    const providerId = providerConfig.providerId;
+    const modelId = providerConfig.modelId;
+
+    if (modelId) {
+      try {
+        // Check if OAuth provider modifies models
+        if (providerConfig.authMethod === "oauth" && providerConfig.oauthCredentials) {
+          const oauthProv = getOAuthProvider(providerId);
+          if (oauthProv?.modifyModels) {
+            const models = getModels(providerId as any);
+            const modified = oauthProv.modifyModels(models, providerConfig.oauthCredentials);
+            const found = modified.find((m) => m.id === modelId);
+            if (found) return found;
+          }
+        }
+        return getModel(providerId as any, modelId as any);
+      } catch {
+        // Fall through to default
+      }
+    }
+
+    // Try default model for provider
+    try {
+      const models = getModels(providerId as any);
+      if (models.length > 0) return models[0];
+    } catch {
+      // Fall through
+    }
+  }
+
+  // Fallback: env var or default anthropic model
+  const envModel = process.env.WOW_AGENT_MODEL || "claude-sonnet-4-5-20250929";
+  const [provider, ...rest] = envModel.includes("/")
+    ? envModel.split("/")
+    : ["anthropic", envModel];
+  return getModel(
+    provider as any,
+    (rest.length > 0 ? rest.join("/") : envModel) as any,
+  );
+}
+
+function buildGetApiKey(providerConfig: ProviderConfig | null): (provider: string) => Promise<string | undefined> {
+  return async (provider: string) => {
+    if (providerConfig && providerConfig.providerId === provider) {
+      // 1. Stored API key
+      if (providerConfig.authMethod === "api-key" && providerConfig.apiKey) {
+        return providerConfig.apiKey;
+      }
+
+      // 2. OAuth credentials
+      if (providerConfig.authMethod === "oauth" && providerConfig.oauthCredentials) {
+        const oauthProv = getOAuthProvider(provider);
+        if (oauthProv) {
+          try {
+            // Refresh if expired
+            if (providerConfig.oauthCredentials.expires < Date.now() / 1000) {
+              const refreshed = await oauthProv.refreshToken(providerConfig.oauthCredentials);
+              providerConfig.oauthCredentials = refreshed as OAuthCredentials;
+              updateOAuthCredentials(refreshed as OAuthCredentials);
+            }
+            return oauthProv.getApiKey(providerConfig.oauthCredentials);
+          } catch (err) {
+            console.error("[agent] OAuth getApiKey failed:", err);
+          }
+        }
+      }
+    }
+
+    // 3. Env var fallback
+    return getEnvApiKey(provider as any) || undefined;
+  };
+}
+
+export function getProviderModels(providerId: string, providerConfig: ProviderConfig | null) {
+  try {
+    let models: any[] = getModels(providerId as any);
+    // Apply OAuth modifications if applicable
+    if (providerConfig?.authMethod === "oauth" && providerConfig.oauthCredentials) {
+      const oauthProv = getOAuthProvider(providerId);
+      if (oauthProv?.modifyModels) {
+        models = oauthProv.modifyModels(models, providerConfig.oauthCredentials);
+      }
+    }
+    return models.map((m: any) => ({ id: m.id, name: m.name }));
+  } catch {
+    return [];
+  }
+}
+
 export function getWowheadBase(versionId: string): string {
   return WOWHEAD_BASE[versionId] || WOWHEAD_BASE.tbc_anniversary;
 }
@@ -107,16 +201,10 @@ export function createAgent(
   mainWindow: BrowserWindow,
   getGameState: () => WoWAgentDB | null,
   versionId: string,
+  providerConfig?: ProviderConfig | null,
 ): Agent {
-  const modelId = process.env.WOW_AGENT_MODEL || "claude-sonnet-4-5-20250929";
-  const [provider, ...rest] = modelId.includes("/")
-    ? modelId.split("/")
-    : ["anthropic", modelId];
-  const model = getModel(
-    provider as any,
-    (rest.length > 0 ? rest.join("/") : modelId) as any,
-  );
-
+  const config = providerConfig || null;
+  const model = resolveModel(config);
   const tools = createTools(getGameState);
 
   const agent = new Agent({
@@ -126,9 +214,7 @@ export function createAgent(
       thinkingLevel: "off",
       tools,
     },
-    getApiKey: async (prov: string) => {
-      return getEnvApiKey(prov as any) || undefined;
-    },
+    getApiKey: buildGetApiKey(config),
   });
 
   // Bridge agent events to the renderer via IPC
