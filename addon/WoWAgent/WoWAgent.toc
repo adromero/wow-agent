@@ -2,7 +2,7 @@
 ## Title: WoW Agent
 ## Notes: AI assistant game state exporter
 ## Author: WoWAgent
-## Version: 1.0.0
+## Version: 0.1.0
 ## SavedVariables: WoWAgentDB
 
 Utils.lua
