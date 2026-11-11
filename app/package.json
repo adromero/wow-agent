@@ -1,16 +1,18 @@
 {
   "name": "wow-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "AI Assistant for World of Warcraft",
   "type": "module",
   "main": "dist/main/index.js",
   "scripts": {
     "build:main": "tsc",
-    "build:renderer": "rm -rf dist/renderer && cp -r src/renderer dist/renderer",
+    "build:renderer": "node scripts/copy-renderer.mjs",
     "build": "npm run build:main && npm run build:renderer",
+    "test": "npm run build:main && node --test \"test/*.test.mjs\"",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",
+    "pack:win": "npm run build && electron-builder --win --x64 --dir",
     "dist": "npm run build && electron-builder"
   },
   "build": {
@@ -37,24 +39,35 @@
       "category": "public.app-category.utilities"
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "target": "AppImage"
+    },
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "onlyLoadAppFromAsar": true,
+      "enableCookieEncryption": true
     }
   },
   "dependencies": {
-    "@mariozechner/pi-agent-core": "^0.52.0",
-    "@mariozechner/pi-ai": "^0.52.0",
+    "@earendil-works/pi-agent-core": "^1.5.2",
+    "@earendil-works/pi-ai": "^1.5.2",
     "dotenv": "^17.2.4",
     "luaparse": "^0.3.1"
   },
   "devDependencies": {
     "@types/luaparse": "^0.2.13",
     "@types/node": "^22.0.0",
-    "electron": "^33.0.0",
-    "electron-builder": "^25.0.0",
-    "typescript": "^5.7.0"
+    "electron": "^45.3.0",
+    "electron-builder": "^26.18.0",
+    "typescript": "^7.0.2"
   }
 }

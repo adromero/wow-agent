@@ -1,5 +1,10 @@
-// Renderer process - runs in browser context with nodeIntegration enabled
-const { ipcRenderer } = require("electron");
+// Renderer process - a sandboxed page with no Node access. All communication
+// with the main process goes through the small API exposed by the preload script.
+const ipcRenderer = {
+  invoke: (channel, payload) => window.wowAgent.invoke(channel, payload),
+  send: (channel, payload) => window.wowAgent.send(channel, payload),
+  on: (channel, listener) => window.wowAgent.on(channel, (data) => listener(null, data)),
+};
 
 // Simple markdown rendering (avoids heavy dependency in renderer)
 function renderMarkdown(text) {
@@ -104,6 +109,9 @@ const oauthCodeInput = document.getElementById("oauth-code-input");
 const oauthCodeSubmit = document.getElementById("oauth-code-submit");
 const addonStatus = document.getElementById("addon-status");
 const addonInstallBtn = document.getElementById("addon-install-btn");
+const refreshButton = document.getElementById("refresh-button");
+const wowPathStatus = document.getElementById("wow-path-status");
+const wowPathBtn = document.getElementById("wow-path-btn");
 
 let providers = [];
 let currentConfig = null;
@@ -117,7 +125,7 @@ function scrollToBottom() {
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
-function addMessage(role, content, imagePath) {
+function addMessage(role, content, thumbnail) {
   const msgDiv = document.createElement("div");
   msgDiv.className = `message ${role}`;
 
@@ -129,10 +137,11 @@ function addMessage(role, content, imagePath) {
   const contentDiv = document.createElement("div");
   contentDiv.className = "message-content";
 
-  if (imagePath) {
+  // Thumbnails are data URLs produced by the main process; anything else is ignored.
+  if (typeof thumbnail === "string" && thumbnail.startsWith("data:image/jpeg;base64,")) {
     const thumb = document.createElement("img");
     thumb.className = "message-thumbnail";
-    thumb.src = `file://${imagePath}`;
+    thumb.src = thumbnail;
     contentDiv.appendChild(thumb);
   }
 
@@ -205,14 +214,14 @@ function sendMessage() {
   const text = messageInput.value.trim();
   if (!text || isStreaming) return;
 
-  const imagePath = pendingScreenshot;
-  addMessage("user", text, imagePath);
+  const screenshot = pendingScreenshot;
+  addMessage("user", text, screenshot ? screenshot.thumbnail : null);
   messageInput.value = "";
   messageInput.style.height = "auto";
   setInputEnabled(false);
 
-  if (imagePath) {
-    ipcRenderer.send("send-message", { text, imagePath });
+  if (screenshot) {
+    ipcRenderer.send("send-message", { text, screenshotId: screenshot.id });
     pendingScreenshot = null;
     screenshotPreview.classList.add("hidden");
   } else {
@@ -231,12 +240,13 @@ function updateGameContextBar(data) {
   const gs = data.game_state;
 
   if (gs.player) {
-    ctxPlayer.textContent = `${gs.player.name} (${gs.player.level} ${gs.player.class})`;
+    const spec = gs.player.spec_name ? `${gs.player.spec_name} ` : "";
+    ctxPlayer.textContent = `${gs.player.name} (${gs.player.level} ${spec}${gs.player.class})`;
   }
 
   if (gs.zone) {
     const zone =
-      gs.zone.instance_type !== "none"
+      gs.zone.instance_type && gs.zone.instance_type !== "none"
         ? `${gs.zone.instance_name}`
         : gs.zone.name;
     ctxZone.textContent = zone;
@@ -269,7 +279,64 @@ function updateSyncStatus(data) {
 function openSettings() {
   settingsOverlay.classList.remove("hidden");
   checkAddonStatus();
+  refreshWowPathStatus();
 }
+
+// --- WoW folder ---
+
+function showWowPath(info) {
+  if (!info) return;
+  if (info.clientFolder) {
+    wowPathStatus.textContent = info.hasSavedVariables
+      ? info.clientFolder
+      : `${info.clientFolder} (no sync yet)`;
+    wowPathStatus.className = "auth-status connected";
+  } else {
+    wowPathStatus.textContent = info.configured
+      ? "Selected version not found in that folder"
+      : "Not found - choose your WoW folder";
+    wowPathStatus.className = "auth-status error";
+  }
+}
+
+async function refreshWowPathStatus() {
+  try {
+    showWowPath(await ipcRenderer.invoke("get-wow-path"));
+  } catch {
+    wowPathStatus.textContent = "Error checking";
+    wowPathStatus.className = "auth-status error";
+  }
+}
+
+wowPathBtn.addEventListener("click", async () => {
+  wowPathBtn.disabled = true;
+  try {
+    showWowPath(await ipcRenderer.invoke("choose-wow-path"));
+    await checkAddonStatus();
+  } finally {
+    wowPathBtn.disabled = false;
+  }
+});
+
+// --- Refresh button ---
+
+refreshButton.addEventListener("click", async () => {
+  refreshButton.disabled = true;
+  try {
+    const result = await ipcRenderer.invoke("refresh-game-state");
+    if (result.found) {
+      // The main process also emits game-state-update, which updates the header.
+    } else if (!result.clientFolder) {
+      addMessage("system", "WoW folder not found. Open Settings and choose your World of Warcraft folder.");
+    } else {
+      addMessage("system", "No game state found yet. Click the Agent Sync button in-game (or type /agent sync) first.");
+    }
+  } catch {
+    addMessage("error", "Could not refresh game state.");
+  } finally {
+    refreshButton.disabled = false;
+  }
+});
 
 function closeSettings() {
   settingsOverlay.classList.add("hidden");
@@ -385,17 +452,33 @@ saveApikeyBtn.addEventListener("click", async () => {
   const key = apiKeyInput.value.trim();
   if (!key) return;
 
-  await ipcRenderer.invoke("set-provider-config", {
+  const result = await ipcRenderer.invoke("save-api-key", {
     providerId: providerSelect.value,
-    authMethod: "api-key",
     apiKey: key,
-    modelId: modelSelect.value || undefined,
   });
+  apiKeyInput.value = "";
+  if (!result.success) {
+    apikeyStatus.textContent = result.error || "Could not save API key";
+    apikeyStatus.className = "auth-status error";
+    return;
+  }
+  if (modelSelect.value) {
+    await ipcRenderer.invoke("set-provider-config", {
+      providerId: providerSelect.value,
+      authMethod: "api-key",
+      modelId: modelSelect.value,
+    });
+  }
   currentConfig = await ipcRenderer.invoke("get-provider-config");
 
-  apiKeyInput.value = "";
-  apikeyStatus.textContent = "API key saved";
-  apikeyStatus.className = "auth-status saved";
+  if (result.persisted) {
+    apikeyStatus.textContent = "API key saved (encrypted)";
+    apikeyStatus.className = "auth-status saved";
+  } else {
+    apikeyStatus.textContent =
+      "Key kept for this session only: OS encryption is unavailable, so it was not written to disk";
+    apikeyStatus.className = "auth-status error";
+  }
 });
 
 oauthLoginBtn.addEventListener("click", async () => {
@@ -436,32 +519,23 @@ ipcRenderer.on("oauth-auth-started", (_event, data) => {
 
 ipcRenderer.on("oauth-prompt", (_event, data) => {
   oauthFlowText.textContent = data.message;
+  oauthFlow.classList.remove("hidden");
   oauthCodeSection.classList.remove("hidden");
+  oauthCodeInput.type = data.secret ? "password" : "text";
   oauthCodeInput.placeholder = data.placeholder || "Enter value...";
   oauthCodeInput.value = "";
   oauthCodeInput.focus();
-
-  const handler = () => {
-    ipcRenderer.send("oauth-prompt-response", oauthCodeInput.value);
-    oauthCodeSection.classList.add("hidden");
-    oauthCodeSubmit.removeEventListener("click", handler);
-  };
-  oauthCodeSubmit.addEventListener("click", handler);
 });
 
-ipcRenderer.on("oauth-manual-code", () => {
-  oauthFlowText.textContent = "Paste the authorization code from your browser:";
-  oauthCodeSection.classList.remove("hidden");
-  oauthCodeInput.placeholder = "Paste code here...";
-  oauthCodeInput.value = "";
-  oauthCodeInput.focus();
+ipcRenderer.on("oauth-prompt-cancel", () => {
+  oauthCodeSection.classList.add("hidden");
+});
 
-  const handler = () => {
-    ipcRenderer.send("oauth-code-response", oauthCodeInput.value);
-    oauthCodeSection.classList.add("hidden");
-    oauthCodeSubmit.removeEventListener("click", handler);
-  };
-  oauthCodeSubmit.addEventListener("click", handler);
+// One permanent handler: the main process tracks which prompt is pending.
+oauthCodeSubmit.addEventListener("click", () => {
+  ipcRenderer.send("oauth-prompt-response", oauthCodeInput.value);
+  oauthCodeInput.value = "";
+  oauthCodeSection.classList.add("hidden");
 });
 
 ipcRenderer.on("oauth-progress", (_event, data) => {
@@ -576,9 +650,11 @@ ipcRenderer.on("version-changed", (_event, data) => {
 
 // --- Screenshot handling ---
 
-ipcRenderer.on("screenshot-captured", (_event, data) => {
-  pendingScreenshot = data.filePath;
-  screenshotImg.src = `file://${data.filePath}`;
+ipcRenderer.on("screenshot-captured", async (_event, data) => {
+  const thumbnail = await ipcRenderer.invoke("get-screenshot-thumbnail", data.id);
+  if (!thumbnail) return;
+  pendingScreenshot = { id: data.id, thumbnail };
+  screenshotImg.src = thumbnail;
   screenshotPreview.classList.remove("hidden");
   scrollToBottom();
 });

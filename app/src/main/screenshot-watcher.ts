@@ -2,7 +2,8 @@ import * as fs from "fs";
 import * as path from "path";
 import { EventEmitter } from "events";
 
-const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".tga"]);
+// TGA screenshots are ignored: they cannot be previewed or sent to the AI.
+const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png"]);
 
 export class ScreenshotWatcher extends EventEmitter {
   private watcher: fs.FSWatcher | null = null;
@@ -14,6 +15,10 @@ export class ScreenshotWatcher extends EventEmitter {
   constructor(private versionFolderPath: string) {
     super();
     this.screenshotsDir = path.join(versionFolderPath, "Screenshots");
+  }
+
+  getScreenshotsDir(): string {
+    return this.screenshotsDir;
   }
 
   start(): void {

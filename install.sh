@@ -5,6 +5,7 @@
 #
 # Usage:
 #   ./install.sh                     # Auto-detect all WoW installs
+#   ./install.sh forever             # Install to WoW Forever only
 #   ./install.sh retail              # Install to Retail only
 #   ./install.sh classic             # Install to Classic Era only
 #   ./install.sh tbc                 # Install to Classic (_classic_)
@@ -19,6 +20,7 @@ ADDON_SRC="$SCRIPT_DIR/addon/WoWAgent"
 # Map short names to folder names
 version_to_folder() {
     case "$1" in
+        forever)          echo "_forever_" ;;
         retail)           echo "_retail_" ;;
         tbc|tbc_anniversary|classic_tbc) echo "_anniversary_" ;;
         mop|mop_classic)  echo "_classic_" ;;
@@ -79,13 +81,13 @@ if [ -n "$1" ]; then
     FILTER_FOLDER=$(version_to_folder "$1")
     if [ -z "$FILTER_FOLDER" ]; then
         echo "Unknown version: $1"
-        echo "Supported: retail, tbc, mop, classic"
+        echo "Supported: forever, retail, tbc, mop, classic"
         echo "Or provide an explicit AddOns path."
         exit 1
     fi
 fi
 
-ALL_FOLDERS="_retail_ _classic_ _classic_era_ _anniversary_"
+ALL_FOLDERS="_forever_ _retail_ _classic_ _classic_era_ _anniversary_"
 if [ -n "$FILTER_FOLDER" ]; then
     ALL_FOLDERS="$FILTER_FOLDER"
 fi
@@ -110,6 +112,7 @@ if [ "$installed" -eq 0 ]; then
     echo ""
     echo "Usage:"
     echo "  $0                        # Auto-detect"
+    echo "  $0 forever                # WoW Forever"
     echo "  $0 retail                 # Retail only"
     echo "  $0 tbc                    # TBC Classic Anniversary"
     echo "  $0 mop                    # MoP Classic"

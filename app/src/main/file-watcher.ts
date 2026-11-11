@@ -45,6 +45,22 @@ export class FileWatcher extends EventEmitter {
     }
   }
 
+  /**
+   * Re-locate and re-read the SavedVariables file on demand, then resume
+   * watching. Returns true if a file with game state was read.
+   */
+  refresh(): boolean {
+    this.stop();
+    const before = this.lastData;
+    this.lastData = null;
+    this.start();
+    if (!this.lastData) {
+      this.lastData = before;
+      return false;
+    }
+    return true;
+  }
+
   getLastData(): WoWAgentDB | null {
     return this.lastData;
   }

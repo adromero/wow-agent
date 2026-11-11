@@ -1,8 +1,8 @@
-## Interface: 11508, 20505, 50503, 120000
+## Interface: 11508, 16001, 20505, 50503, 120000
 ## Title: WoW Agent
 ## Notes: AI assistant game state exporter
 ## Author: WoWAgent
-## Version: 0.1.0
+## Version: 0.2.0
 ## SavedVariables: WoWAgentDB
 
 Utils.lua

@@ -54,7 +54,7 @@ function convertTable(node: any): any {
     return fields.map((f: any) => luaAstToJS(f.value));
   }
 
-  const result: Record<string, any> = {};
+  const result: Record<string, any> = Object.create(null);
   let implicitIndex = 1;
 
   for (const field of fields) {
@@ -85,6 +85,17 @@ export interface GameState {
   zone?: ZoneState;
   party?: PartyMember[];
   gear?: GearState;
+  professions?: Profession[];
+  bags?: BagState;
+  quests?: Quest[];
+  client?: ClientInfo;
+  /** Sections the addon failed to collect, with the Lua error text. */
+  errors?: Record<string, string>;
+}
+
+export interface TalentTree {
+  name: string;
+  points: number;
 }
 
 export interface PlayerState {
@@ -92,12 +103,26 @@ export interface PlayerState {
   realm?: string;
   level: number;
   class: string;
-  spec_index: number;
+  race?: string;
+  faction?: string;
+  spec_index?: number;
+  spec_name?: string;
+  spec_role?: string;
+  talent_trees?: TalentTree[];
   health: number;
   max_health: number;
   power: number;
   max_power: number;
   power_type: string;
+  xp?: number;
+  xp_max?: number;
+  xp_rested?: number;
+  money_copper?: number;
+  hearthstone?: string;
+  is_dead_or_ghost?: boolean;
+  map_id?: number;
+  map_x?: number;
+  map_y?: number;
 }
 
 export interface TargetState {
@@ -105,8 +130,10 @@ export interface TargetState {
   realm?: string;
   level: number;
   classification: string;
-  creature_type: string;
-  health_pct: number;
+  creature_type?: string;
+  class?: string;
+  reaction?: number;
+  health_pct?: number;
   is_player: boolean;
   is_dead: boolean;
 }
@@ -125,13 +152,66 @@ export interface PartyMember {
   name: string;
   class: string;
   level: number;
-  role: string;
-  health_pct: number;
+  role?: string;
+  health_pct?: number;
+}
+
+export interface GearItem {
+  slot: string;
+  name?: string;
+  item_id?: number;
+  ilvl?: number;
+  quality?: number;
+  durability?: number;
+  max_durability?: number;
 }
 
 export interface GearState {
   avg_ilvl: number;
   slot_count: number;
+  items?: GearItem[];
+}
+
+export interface Profession {
+  name: string;
+  rank?: number;
+  max_rank?: number;
+  category?: string;
+}
+
+export interface BagState {
+  free_slots: number;
+  total_slots: number;
+}
+
+export interface QuestObjective {
+  text?: string;
+  done: boolean;
+  have?: number;
+  need?: number;
+}
+
+export interface Quest {
+  id?: number;
+  title: string;
+  level?: number;
+  category?: string;
+  status: "in_progress" | "complete" | "failed";
+  suggested_group?: number;
+  is_daily?: boolean;
+  objectives?: QuestObjective[];
+}
+
+export interface ClientInfo {
+  version?: string;
+  build?: string;
+  interface?: number;
+  locale?: string;
+}
+
+/** An empty Lua table parses as {}; treat anything that is not an array as an empty list. */
+export function asArray<T>(value: T[] | undefined | null | object): T[] {
+  return Array.isArray(value) ? value : [];
 }
 
 /**
@@ -146,7 +226,7 @@ export function parseSavedVariables(
     luaVersion: "5.1",
   });
 
-  const variables: Record<string, any> = {};
+  const variables: Record<string, any> = Object.create(null);
 
   for (const statement of (ast as any).body) {
     if (statement.type === "AssignmentStatement") {

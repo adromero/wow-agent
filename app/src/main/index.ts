@@ -1,28 +1,42 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  nativeImage,
+  session,
+  shell,
+  type IpcMainEvent,
+  type IpcMainInvokeEvent,
+} from "electron";
 import * as path from "path";
 import * as fs from "fs";
-import { fileURLToPath } from "url";
+import * as crypto from "crypto";
+import { fileURLToPath, pathToFileURL } from "url";
+import type { Agent } from "@earendil-works/pi-agent-core";
+import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 import {
-  loadConfig,
   WOW_VERSIONS,
+  WINDOW_DEFAULTS,
   getWowVersion,
+  getProvider,
   loadSelectedVersion,
   saveSelectedVersion,
-  findSavedVariablesPath,
+  findWtfPath,
+  findVersionFolder,
   findAddOnsPath,
+  findSavedVariablesFile,
   PROVIDERS,
   loadProviderConfig,
   saveProviderConfig,
-  updateOAuthCredentials,
-  clearProviderAuth,
+  loadWowPath,
+  saveWowPath,
+  loadExtraAllowedHosts,
+  stripLegacySecrets,
   type ProviderConfig,
-  type OAuthCredentials,
-  findScreenshotsPath,
 } from "./config.js";
-import { getOAuthProvider, type OAuthAuthInfo, type OAuthPrompt } from "@mariozechner/pi-ai";
+import { SecureCredentialStore } from "./secure-store.js";
 import { FileWatcher } from "./file-watcher.js";
 import { ScreenshotWatcher } from "./screenshot-watcher.js";
 import {
@@ -30,9 +44,23 @@ import {
   formatGameContext,
   formatZoneLookupPrompt,
   getProviderModels,
+  getModelsCollection,
+  initModels,
 } from "./agent.js";
-import type { Agent } from "@mariozechner/pi-agent-core";
+import { DEFAULT_ALLOWED_HOSTS } from "./tools/web-fetch.js";
 import type { WoWAgentDB } from "./lua-reader.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const RENDERER_INDEX = path.join(__dirname, "..", "renderer", "index.html");
+const RENDERER_URL = pathToFileURL(RENDERER_INDEX).href;
+const PRELOAD = path.join(__dirname, "preload.cjs");
+
+const MAX_MESSAGE_LENGTH = 20000;
+const MAX_SCREENSHOT_BYTES = 30 * 1024 * 1024;
+/** Longest edge of an image sent to the AI; larger screenshots are scaled down. */
+const MAX_IMAGE_EDGE = 1568;
 
 let mainWindow: BrowserWindow | null = null;
 let fileWatcher: FileWatcher | null = null;
@@ -43,332 +71,513 @@ let currentProviderConfig: ProviderConfig | null = loadProviderConfig();
 let lastZoneName: string | null = null;
 let isAgentBusy = false;
 
-function createWindow(): BrowserWindow {
-  const config = loadConfig();
+const credentialStore = new SecureCredentialStore();
 
+/** Screenshots the watcher has reported, by opaque id. The renderer never sees a file path. */
+const screenshots = new Map<string, string>();
+
+/** Resolver for the OAuth prompt currently shown in the window, if any. */
+let pendingOAuthPrompt: ((value: string) => void) | null = null;
+
+function sendToRenderer(channel: string, data?: unknown): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, data);
+  }
+}
+
+function getAllowedHosts(): string[] {
+  return [...DEFAULT_ALLOWED_HOSTS, ...loadExtraAllowedHosts()];
+}
+
+// --- Window ---
+
+function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
-    width: config.window.width,
-    height: config.window.height,
-    alwaysOnTop: config.window.alwaysOnTop,
-    opacity: config.window.opacity,
+    width: WINDOW_DEFAULTS.width,
+    height: WINDOW_DEFAULTS.height,
+    alwaysOnTop: WINDOW_DEFAULTS.alwaysOnTop,
+    opacity: WINDOW_DEFAULTS.opacity,
     frame: true,
     titleBarStyle: "hiddenInset",
     backgroundColor: "#1a1a2e",
+    autoHideMenuBar: true,
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
+      preload: PRELOAD,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      webviewTag: false,
+      nodeIntegrationInWorker: false,
+      nodeIntegrationInSubFrames: false,
+      spellcheck: false,
     },
   });
 
-  // Load the renderer HTML
-  win.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
+  // The window only ever shows its own bundled page.
+  win.webContents.on("will-navigate", (event, url) => {
+    if (url !== RENDERER_URL) event.preventDefault();
+  });
+  win.webContents.on("will-redirect", (event) => event.preventDefault());
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-attach-webview", (event) => event.preventDefault());
 
+  win.loadFile(RENDERER_INDEX);
   return win;
 }
 
+// --- IPC helpers ---
+
+/** Accept IPC only from the top-level frame of our own page in our own window. */
+function isTrustedSender(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
+  const frame = event.senderFrame;
+  return (
+    !!mainWindow &&
+    !mainWindow.isDestroyed() &&
+    event.sender === mainWindow.webContents &&
+    !!frame &&
+    frame === mainWindow.webContents.mainFrame &&
+    frame.url === RENDERER_URL
+  );
+}
+
+function handle(
+  channel: string,
+  fn: (payload: any) => unknown | Promise<unknown>,
+): void {
+  ipcMain.handle(channel, (event, payload) => {
+    if (!isTrustedSender(event)) throw new Error("Untrusted sender");
+    return fn(payload);
+  });
+}
+
+function on(channel: string, fn: (payload: any) => void): void {
+  ipcMain.on(channel, (event, payload) => {
+    if (!isTrustedSender(event)) return;
+    fn(payload);
+  });
+}
+
+// --- Screenshots ---
+
+/** Resolve a screenshot id to a real file inside the Screenshots directory, or null. */
+function resolveScreenshot(id: unknown): string | null {
+  if (typeof id !== "string") return null;
+  const filePath = screenshots.get(id);
+  const dir = screenshotWatcher?.getScreenshotsDir();
+  if (!filePath || !dir) return null;
+  try {
+    const realFile = fs.realpathSync(filePath);
+    const realDir = fs.realpathSync(dir);
+    if (path.dirname(realFile) !== realDir) return null;
+    const ext = path.extname(realFile).toLowerCase();
+    if (![".jpg", ".jpeg", ".png"].includes(ext)) return null;
+    const stat = fs.statSync(realFile);
+    if (!stat.isFile() || stat.size > MAX_SCREENSHOT_BYTES) return null;
+    return realFile;
+  } catch {
+    return null;
+  }
+}
+
+/** Load a screenshot scaled so its longest edge is at most maxEdge, as JPEG. */
+function loadScaledJpeg(filePath: string, maxEdge: number, quality: number): Buffer | null {
+  const image = nativeImage.createFromPath(filePath);
+  if (image.isEmpty()) return null;
+  const { width, height } = image.getSize();
+  const scale = Math.min(1, maxEdge / Math.max(width, height));
+  const scaled =
+    scale < 1
+      ? image.resize({
+          width: Math.round(width * scale),
+          height: Math.round(height * scale),
+          quality: "good",
+        })
+      : image;
+  return scaled.toJPEG(quality);
+}
+
+// --- Provider helpers ---
+
+async function describeProviderConfig() {
+  if (!currentProviderConfig) return null;
+  const credential = await credentialStore.read(currentProviderConfig.providerId);
+  return {
+    providerId: currentProviderConfig.providerId,
+    authMethod: currentProviderConfig.authMethod,
+    hasApiKey: credential?.type === "api_key",
+    hasOAuth: credential?.type === "oauth",
+    modelId: currentProviderConfig.modelId,
+    canPersist: credentialStore.canPersist(),
+  };
+}
+
+function describeWowPath() {
+  const version = getWowVersion(currentVersionId);
+  const folder = version ? findVersionFolder(version) : "";
+  const wtf = version ? findWtfPath(version) : "";
+  return {
+    configured: loadWowPath(),
+    clientFolder: folder,
+    hasSavedVariables: !!findSavedVariablesFile(wtf),
+  };
+}
+
+function restartWatchers(): void {
+  lastZoneName = null; // so the next sync does not trigger a zone lookup
+  fileWatcher?.stop();
+  fileWatcher = null;
+  setupFileWatcher();
+  screenshotWatcher?.stop();
+  screenshotWatcher = null;
+  screenshots.clear();
+  setupScreenshotWatcher();
+}
+
+// --- IPC ---
+
 function setupIPC(): void {
   // User sends a chat message (with optional screenshot)
-  ipcMain.on(
-    "send-message",
-    async (
-      _event,
-      payload: string | { text: string; imagePath?: string },
-    ) => {
-      if (!agent || !mainWindow) return;
+  on("send-message", async (payload) => {
+    if (!agent || !mainWindow) return;
+    if (!payload || typeof payload.text !== "string") return;
+    const text = payload.text.slice(0, MAX_MESSAGE_LENGTH);
+    if (!text.trim()) return;
 
-      const text = typeof payload === "string" ? payload : payload.text;
-      const imagePath =
-        typeof payload === "string" ? undefined : payload.imagePath;
+    if (isAgentBusy) {
+      sendToRenderer("agent-event", {
+        type: "error",
+        message: "Still working on the previous request. Try again in a moment.",
+      });
+      return;
+    }
 
-      try {
-        // Include game context with the user message
-        const gameContext = formatGameContext(
-          fileWatcher?.getLastData() || null,
-        );
-        const fullMessage = gameContext
-          ? `${gameContext}\n\n${text}`
-          : text;
+    try {
+      const gameContext = formatGameContext(fileWatcher?.getLastData() || null);
+      const fullMessage = gameContext ? `${gameContext}\n\n${text}` : text;
 
-        isAgentBusy = true;
-        try {
-          if (imagePath && fs.existsSync(imagePath)) {
-            const imageBuffer = fs.readFileSync(imagePath);
-            const base64 = imageBuffer.toString("base64");
-            const ext = path.extname(imagePath).toLowerCase();
-            const mimeMap: Record<string, string> = {
-              ".jpg": "image/jpeg",
-              ".jpeg": "image/jpeg",
-              ".png": "image/png",
-              ".tga": "image/png", // TGA not natively supported, but fallback
-            };
-            const mimeType = mimeMap[ext] || "image/jpeg";
-
-            await agent.prompt(fullMessage, [
-              { type: "image", data: base64, mimeType },
-            ]);
-          } else {
-            await agent.prompt(fullMessage);
-          }
-        } finally {
-          isAgentBusy = false;
-        }
-      } catch (err: any) {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("agent-event", {
+      let image: Buffer | null = null;
+      if (payload.screenshotId !== undefined) {
+        const filePath = resolveScreenshot(payload.screenshotId);
+        image = filePath ? loadScaledJpeg(filePath, MAX_IMAGE_EDGE, 85) : null;
+        if (!image) {
+          sendToRenderer("agent-event", {
             type: "error",
-            message: err.message || "Unknown error",
+            message: "That screenshot could not be read, so the message was not sent.",
           });
+          return;
         }
       }
-    },
-  );
 
-  // Request current game state
-  ipcMain.handle("get-game-state", () => {
-    return fileWatcher?.getLastData() || null;
-  });
-
-  // Request sync status
-  ipcMain.handle("get-sync-status", () => {
-    const data = fileWatcher?.getLastData();
-    return {
-      connected: !!data,
-      lastSync: data?.last_sync || 0,
-      hasGameState: !!(data?.game_state),
-    };
-  });
-
-  // Abort current agent response
-  ipcMain.on("abort-response", () => {
-    agent?.abort();
-  });
-
-  // Clear conversation
-  ipcMain.on("clear-conversation", () => {
-    agent?.clearMessages();
-  });
-
-  // --- Version management IPC ---
-
-  ipcMain.handle("get-wow-versions", () => {
-    return WOW_VERSIONS.map((v) => ({ id: v.id, label: v.label }));
-  });
-
-  ipcMain.handle("get-selected-version", () => {
-    return currentVersionId;
-  });
-
-  ipcMain.on("set-wow-version", (_event, versionId: string) => {
-    if (!getWowVersion(versionId)) return;
-    if (versionId === currentVersionId) return;
-
-    currentVersionId = versionId;
-    saveSelectedVersion(versionId);
-    lastZoneName = null; // Reset so first sync in new version doesn't trigger lookup
-
-    // Restart file watcher with new WTF path
-    fileWatcher?.stop();
-    fileWatcher = null;
-    setupFileWatcher();
-
-    // Restart screenshot watcher
-    screenshotWatcher?.stop();
-    screenshotWatcher = null;
-    setupScreenshotWatcher();
-
-    // Recreate agent with new system prompt
-    setupAgent();
-
-    // Notify renderer
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      const version = getWowVersion(versionId)!;
-      mainWindow.webContents.send("version-changed", {
-        id: version.id,
-        label: version.label,
+      isAgentBusy = true;
+      try {
+        if (image) {
+          await agent.prompt(fullMessage, [
+            { type: "image", data: image.toString("base64"), mimeType: "image/jpeg" },
+          ]);
+        } else {
+          await agent.prompt(fullMessage);
+        }
+      } finally {
+        isAgentBusy = false;
+      }
+    } catch (err: any) {
+      sendToRenderer("agent-event", {
+        type: "error",
+        message: err?.message || "Unknown error",
       });
     }
   });
 
-  // --- Provider management IPC ---
+  handle("get-game-state", () => fileWatcher?.getLastData() || null);
 
-  ipcMain.handle("get-providers", () => {
-    return PROVIDERS.map((p) => ({
+  // Refresh button: re-locate and re-read SavedVariables without waiting for a file change
+  handle("refresh-game-state", () => {
+    if (!fileWatcher) {
+      setupFileWatcher();
+      if (!screenshotWatcher) setupScreenshotWatcher();
+    }
+    const found = fileWatcher ? fileWatcher.refresh() : false;
+    return { found, data: fileWatcher?.getLastData() || null, ...describeWowPath() };
+  });
+
+  on("abort-response", () => {
+    agent?.abort();
+  });
+
+  on("clear-conversation", () => {
+    agent?.abort();
+    agent?.reset();
+  });
+
+  // --- Version management ---
+
+  handle("get-wow-versions", () =>
+    WOW_VERSIONS.map((v) => ({ id: v.id, label: v.label })),
+  );
+
+  handle("get-selected-version", () => currentVersionId);
+
+  on("set-wow-version", (versionId) => {
+    if (typeof versionId !== "string" || !getWowVersion(versionId)) return;
+    if (versionId === currentVersionId) return;
+
+    currentVersionId = versionId;
+    saveSelectedVersion(versionId);
+    restartWatchers();
+    setupAgent(); // new system prompt
+
+    const version = getWowVersion(versionId)!;
+    sendToRenderer("version-changed", { id: version.id, label: version.label });
+  });
+
+  // --- WoW install location ---
+
+  handle("get-wow-path", () => describeWowPath());
+
+  handle("choose-wow-path", async () => {
+    if (!mainWindow) return describeWowPath();
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "Select your World of Warcraft folder",
+      properties: ["openDirectory"],
+    });
+    if (!result.canceled && result.filePaths[0]) {
+      saveWowPath(result.filePaths[0]);
+      restartWatchers();
+    }
+    return describeWowPath();
+  });
+
+  // --- Provider management ---
+
+  handle("get-providers", () =>
+    PROVIDERS.map((p) => ({
       id: p.id,
       label: p.label,
       authMethods: p.authMethods,
       defaultModel: p.defaultModel,
-    }));
-  });
+    })),
+  );
 
-  ipcMain.handle("get-provider-models", (_event, providerId: string) => {
-    return getProviderModels(providerId, currentProviderConfig);
-  });
+  handle("get-provider-models", (providerId) =>
+    typeof providerId === "string" && getProvider(providerId)
+      ? getProviderModels(providerId)
+      : [],
+  );
 
-  ipcMain.handle("get-provider-config", () => {
-    if (!currentProviderConfig) return null;
-    // Don't send raw API key to renderer - just indicate if one is set
-    return {
-      providerId: currentProviderConfig.providerId,
-      authMethod: currentProviderConfig.authMethod,
-      hasApiKey: !!currentProviderConfig.apiKey,
-      hasOAuth: !!currentProviderConfig.oauthCredentials,
-      modelId: currentProviderConfig.modelId,
-    };
-  });
+  // The raw key or token is never sent to the window - only whether one is stored.
+  handle("get-provider-config", () => describeProviderConfig());
 
-  ipcMain.handle("set-provider-config", (_event, config: { providerId: string; authMethod: "api-key" | "oauth"; apiKey?: string; modelId?: string }) => {
-    const existing = currentProviderConfig;
-    currentProviderConfig = {
-      providerId: config.providerId,
-      authMethod: config.authMethod,
-      apiKey: config.apiKey || existing?.apiKey,
-      oauthCredentials: existing?.oauthCredentials,
-      modelId: config.modelId,
-    };
+  handle("set-provider-config", (config) => {
+    const provider = getProvider(config?.providerId);
+    if (!provider) return { success: false, error: "Unknown provider" };
+    const authMethod = provider.authMethods.includes(config.authMethod)
+      ? config.authMethod
+      : provider.authMethods[0];
+    const models = getProviderModels(provider.id);
+    const modelId =
+      typeof config.modelId === "string" && models.some((m) => m.id === config.modelId)
+        ? config.modelId
+        : undefined;
+
+    currentProviderConfig = { providerId: provider.id, authMethod, modelId };
     saveProviderConfig(currentProviderConfig);
     setupAgent();
     return { success: true };
   });
 
-  ipcMain.handle("oauth-login", async (_event, providerId: string) => {
-    const oauthProv = getOAuthProvider(providerId);
-    if (!oauthProv) {
-      return { success: false, error: `No OAuth provider for ${providerId}` };
+  handle("save-api-key", async (payload) => {
+    const provider = getProvider(payload?.providerId);
+    const apiKey = typeof payload?.apiKey === "string" ? payload.apiKey.trim() : "";
+    if (!provider || !provider.authMethods.includes("api-key")) {
+      return { success: false, error: "This provider does not use an API key" };
+    }
+    if (!apiKey || apiKey.length > 1000) {
+      return { success: false, error: "Invalid API key" };
+    }
+    await credentialStore.modify(provider.id, async () => ({ type: "api_key", key: apiKey }));
+    stripLegacySecrets(); // a new key replaces any plain-text one left by an older version
+    currentProviderConfig = {
+      providerId: provider.id,
+      authMethod: "api-key",
+      modelId:
+        currentProviderConfig?.providerId === provider.id
+          ? currentProviderConfig.modelId
+          : undefined,
+    };
+    saveProviderConfig(currentProviderConfig);
+    setupAgent();
+    return { success: true, persisted: credentialStore.canPersist() };
+  });
+
+  on("oauth-prompt-response", (response) => {
+    const resolve = pendingOAuthPrompt;
+    pendingOAuthPrompt = null;
+    resolve?.(typeof response === "string" ? response : "");
+  });
+
+  handle("oauth-login", async (providerId) => {
+    const provider = getProvider(providerId);
+    if (!provider || !provider.authMethods.includes("oauth")) {
+      return { success: false, error: "This provider does not support login" };
     }
 
+    const openExternal = (url: string) => {
+      // Only ever hand https links to the system browser.
+      try {
+        if (new URL(url).protocol === "https:") void shell.openExternal(url);
+      } catch {
+        // Not a URL
+      }
+    };
+
     try {
-      const credentials = await oauthProv.login({
-        onAuth: (info: OAuthAuthInfo) => {
-          // Open browser for user to authenticate
-          shell.openExternal(info.url);
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send("oauth-auth-started", {
-              url: info.url,
-              instructions: info.instructions,
-            });
-          }
-        },
-        onPrompt: (prompt: OAuthPrompt) => {
-          return new Promise<string>((resolve) => {
+      await getModelsCollection().login(provider.id, "oauth", {
+        prompt: (prompt: AuthPrompt) =>
+          new Promise<string>((resolve, reject) => {
             if (!mainWindow || mainWindow.isDestroyed()) {
-              resolve("");
+              reject(new Error("Window closed"));
               return;
             }
-            mainWindow.webContents.send("oauth-prompt", {
-              message: prompt.message,
-              placeholder: prompt.placeholder,
-              allowEmpty: prompt.allowEmpty,
-            });
-            ipcMain.once("oauth-prompt-response", (_e, response: string) => {
-              resolve(response);
-            });
-          });
-        },
-        onProgress: (message: string) => {
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send("oauth-progress", { message });
-          }
-        },
-        onManualCodeInput: () => {
-          return new Promise<string>((resolve) => {
-            if (!mainWindow || mainWindow.isDestroyed()) {
-              resolve("");
-              return;
+            let message = prompt.message;
+            let options: readonly { id: string; label: string }[] = [];
+            if (prompt.type === "select") {
+              options = prompt.options;
+              message +=
+                "\n" + options.map((o, i) => `${i + 1}. ${o.label}`).join("\n") +
+                "\nEnter the number of your choice.";
             }
-            mainWindow.webContents.send("oauth-manual-code");
-            ipcMain.once("oauth-code-response", (_e, code: string) => {
-              resolve(code);
+            pendingOAuthPrompt = (value: string) => {
+              if (prompt.type === "select") {
+                const picked = options[Number(value.trim()) - 1];
+                if (picked) resolve(picked.id);
+                else reject(new Error("Invalid selection"));
+              } else {
+                resolve(value);
+              }
+            };
+            prompt.signal?.addEventListener("abort", () => {
+              pendingOAuthPrompt = null;
+              sendToRenderer("oauth-prompt-cancel");
+              reject(new Error("Prompt cancelled"));
             });
-          });
+            sendToRenderer("oauth-prompt", {
+              message,
+              placeholder: "placeholder" in prompt ? prompt.placeholder : undefined,
+              secret: prompt.type === "secret",
+            });
+          }),
+        notify: (event: AuthEvent) => {
+          if (event.type === "auth_url") {
+            openExternal(event.url);
+            sendToRenderer("oauth-auth-started", { instructions: event.instructions });
+          } else if (event.type === "device_code") {
+            openExternal(event.verificationUri);
+            sendToRenderer("oauth-progress", {
+              message: `Enter code ${event.userCode} in the browser page that just opened.`,
+            });
+          } else {
+            sendToRenderer("oauth-progress", { message: event.message });
+          }
         },
       });
 
-      // Save credentials
       currentProviderConfig = {
-        providerId,
+        providerId: provider.id,
         authMethod: "oauth",
-        oauthCredentials: credentials as OAuthCredentials,
-        modelId: currentProviderConfig?.modelId,
+        modelId:
+          currentProviderConfig?.providerId === provider.id
+            ? currentProviderConfig.modelId
+            : undefined,
       };
       saveProviderConfig(currentProviderConfig);
       setupAgent();
-
-      return { success: true };
+      return { success: true, persisted: credentialStore.canPersist() };
     } catch (err: any) {
-      return { success: false, error: err.message || "OAuth login failed" };
+      pendingOAuthPrompt = null;
+      return { success: false, error: err?.message || "Login failed" };
     }
   });
 
-  ipcMain.handle("oauth-logout", () => {
-    clearProviderAuth();
-    currentProviderConfig = loadProviderConfig();
-    setupAgent();
+  handle("oauth-logout", async () => {
+    if (currentProviderConfig) {
+      await getModelsCollection().logout(currentProviderConfig.providerId);
+      stripLegacySecrets();
+      setupAgent();
+    }
     return { success: true };
   });
 
-  // --- Addon install IPC ---
+  // --- Screenshots ---
 
-  ipcMain.handle("check-addon-installed", () => {
-    const version = getWowVersion(currentVersionId);
-    if (!version) return { installed: false };
-    const addonsPath = findAddOnsPath(version.folderName);
-    if (!addonsPath) return { installed: false, addonsPath: "" };
-    const addonDir = path.join(addonsPath, "WoWAgent");
-    return { installed: fs.existsSync(addonDir), addonsPath };
+  handle("get-screenshot-thumbnail", (id) => {
+    const filePath = resolveScreenshot(id);
+    const jpeg = filePath ? loadScaledJpeg(filePath, 480, 70) : null;
+    return jpeg ? `data:image/jpeg;base64,${jpeg.toString("base64")}` : null;
   });
 
-  ipcMain.handle("install-addon", () => {
+  // --- Addon install ---
+
+  handle("check-addon-installed", () => {
+    const version = getWowVersion(currentVersionId);
+    const addonsPath = version ? findAddOnsPath(version) : "";
+    if (!addonsPath) return { installed: false, addonsPath: "" };
+    return {
+      installed: fs.existsSync(path.join(addonsPath, "WoWAgent", "WoWAgent.toc")),
+      addonsPath,
+    };
+  });
+
+  handle("install-addon", () => {
     const version = getWowVersion(currentVersionId);
     if (!version) return { success: false, error: "No WoW version selected" };
 
-    const addonsPath = findAddOnsPath(version.folderName);
-    if (!addonsPath) return { success: false, error: "Could not find WoW AddOns directory" };
-
-    // Source: bundled in resources (packaged) or project root (dev)
-    let addonSource: string;
-    if (app.isPackaged) {
-      addonSource = path.join(process.resourcesPath, "addon", "WoWAgent");
-    } else {
-      addonSource = path.join(__dirname, "..", "..", "..", "addon", "WoWAgent");
+    const addonsPath = findAddOnsPath(version);
+    if (!addonsPath) {
+      return {
+        success: false,
+        error: `Could not find the ${version.label} folder. Set your WoW folder above.`,
+      };
     }
 
+    // Source: bundled in resources (packaged) or project root (dev)
+    const addonSource = app.isPackaged
+      ? path.join(process.resourcesPath, "addon", "WoWAgent")
+      : path.join(__dirname, "..", "..", "..", "addon", "WoWAgent");
+
     if (!fs.existsSync(addonSource)) {
-      return { success: false, error: `Addon source not found: ${addonSource}` };
+      return { success: false, error: "Addon files are missing from this build" };
     }
 
     const destDir = path.join(addonsPath, "WoWAgent");
 
     try {
-      // Create destination if needed
-      if (!fs.existsSync(destDir)) {
-        fs.mkdirSync(destDir, { recursive: true });
+      // A symlink (from install.sh) already points at the source; leave it alone.
+      if (fs.existsSync(destDir) && fs.lstatSync(destDir).isSymbolicLink()) {
+        return { success: true, path: destDir };
       }
-
-      // Copy all files
-      const files = fs.readdirSync(addonSource);
-      for (const file of files) {
+      fs.mkdirSync(destDir, { recursive: true });
+      for (const file of fs.readdirSync(addonSource)) {
         const srcFile = path.join(addonSource, file);
-        const destFile = path.join(destDir, file);
-        fs.copyFileSync(srcFile, destFile);
+        if (fs.statSync(srcFile).isFile()) {
+          fs.copyFileSync(srcFile, path.join(destDir, file));
+        }
       }
-
       return { success: true, path: destDir };
     } catch (err: any) {
-      return { success: false, error: err.message || "Failed to copy addon files" };
+      return { success: false, error: err?.message || "Failed to copy addon files" };
     }
   });
 }
 
+// --- Watchers ---
+
 function setupFileWatcher(): void {
   const version = getWowVersion(currentVersionId);
-  const wtfPath =
-    process.env.WOW_WTF_PATH ||
-    (version ? findSavedVariablesPath(version.folderName) : "");
+  const wtfPath = version ? findWtfPath(version) : "";
 
   if (!wtfPath) {
-    console.log(
-      "[main] No WTF path found. Set WOW_WTF_PATH environment variable.",
-    );
+    console.log("[main] WoW folder not found. Set it in Settings or via WOW_WTF_PATH.");
     return;
   }
 
@@ -376,14 +585,14 @@ function setupFileWatcher(): void {
 
   fileWatcher.on("update", (data: WoWAgentDB) => {
     console.log("[main] Game state updated from SavedVariables");
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("game-state-update", data);
-    }
+    sendToRenderer("game-state-update", data);
 
     // Detect zone changes and auto-prompt the agent
     const zone = data.game_state?.zone;
     const newZone =
-      zone && zone.instance_type !== "none" ? zone.instance_name : zone?.name;
+      zone && zone.instance_type && zone.instance_type !== "none"
+        ? zone.instance_name
+        : zone?.name;
 
     if (newZone && newZone !== lastZoneName) {
       const previousZone = lastZoneName;
@@ -391,37 +600,28 @@ function setupFileWatcher(): void {
 
       // Only auto-prompt if this isn't the initial sync and agent is free
       if (previousZone !== null && agent && !isAgentBusy) {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("zone-lookup", {
-            from: previousZone,
-            to: newZone,
-          });
-        }
+        sendToRenderer("zone-lookup", { from: previousZone, to: newZone });
 
-        const prompt = formatZoneLookupPrompt(
-          data,
-          previousZone,
-          newZone,
-          currentVersionId,
-        );
+        const prompt = formatZoneLookupPrompt(data, previousZone, newZone, currentVersionId);
         isAgentBusy = true;
-        agent.prompt(prompt).catch((err) => {
-          console.error("[main] Zone lookup prompt failed:", err);
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send("agent-event", {
+        agent
+          .prompt(prompt)
+          .catch((err) => {
+            console.error("[main] Zone lookup prompt failed:", err?.message);
+            sendToRenderer("agent-event", {
               type: "error",
-              message: `Zone lookup failed: ${err.message}`,
+              message: `Zone lookup failed: ${err?.message}`,
             });
-          }
-        }).finally(() => {
-          isAgentBusy = false;
-        });
+          })
+          .finally(() => {
+            isAgentBusy = false;
+          });
       }
     }
   });
 
   fileWatcher.on("error", (err: Error) => {
-    console.error("[main] File watcher error:", err);
+    console.error("[main] File watcher error:", err.message);
   });
 
   fileWatcher.start();
@@ -429,23 +629,20 @@ function setupFileWatcher(): void {
 
 function setupScreenshotWatcher(): void {
   const version = getWowVersion(currentVersionId);
-  const wtfPath =
-    process.env.WOW_WTF_PATH ||
-    (version ? findSavedVariablesPath(version.folderName) : "");
-
+  const wtfPath = version ? findWtfPath(version) : "";
   if (!wtfPath) return;
 
-  // Version folder is the parent of the WTF directory
-  const versionFolderPath = path.dirname(wtfPath);
-  screenshotWatcher = new ScreenshotWatcher(versionFolderPath);
+  // The client folder is the parent of the WTF directory
+  screenshotWatcher = new ScreenshotWatcher(path.dirname(wtfPath));
 
   screenshotWatcher.on("screenshot", (data: { filePath: string }) => {
-    console.log("[main] Screenshot detected:", data.filePath);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("screenshot-captured", {
-        filePath: data.filePath,
-      });
+    const id = crypto.randomUUID();
+    screenshots.set(id, data.filePath);
+    // Keep the map small: only recent screenshots can be attached.
+    while (screenshots.size > 20) {
+      screenshots.delete(screenshots.keys().next().value!);
     }
+    sendToRenderer("screenshot-captured", { id });
   });
 
   screenshotWatcher.start();
@@ -453,38 +650,68 @@ function setupScreenshotWatcher(): void {
 
 function setupAgent(): void {
   if (!mainWindow) return;
+  agent?.abort();
+  isAgentBusy = false;
 
-  const getGameState = (): WoWAgentDB | null => {
-    return fileWatcher?.getLastData() || null;
-  };
-
-  agent = createAgent(mainWindow, getGameState, currentVersionId, currentProviderConfig);
+  try {
+    agent = createAgent(
+      mainWindow,
+      () => fileWatcher?.getLastData() || null,
+      currentVersionId,
+      currentProviderConfig,
+      getAllowedHosts,
+    );
+  } catch (err: any) {
+    agent = null;
+    console.error("[main] Could not create agent:", err?.message);
+  }
 }
 
-app.whenReady().then(() => {
-  mainWindow = createWindow();
+// --- App lifecycle ---
 
-  setupIPC();
-  setupFileWatcher();
-  setupScreenshotWatcher();
-  setupAgent();
+// One instance only: two would fight over the same settings and credentials.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
 
-  mainWindow.on("closed", () => {
-    mainWindow = null;
+  // No page in this app may create further web contents or ask for permissions.
+  app.on("web-contents-created", (_event, contents) => {
+    contents.setWindowOpenHandler(() => ({ action: "deny" }));
+  });
+
+  app.whenReady().then(async () => {
+    session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) =>
+      callback(false),
+    );
+    session.defaultSession.setPermissionCheckHandler(() => false);
+
+    await credentialStore.init();
+    await credentialStore.migrateLegacySecrets();
+    initModels(credentialStore);
+
+    mainWindow = createWindow();
+
+    setupIPC();
+    setupFileWatcher();
+    setupScreenshotWatcher();
+    setupAgent();
+
+    mainWindow.on("closed", () => {
+      mainWindow = null;
+      fileWatcher?.stop();
+      screenshotWatcher?.stop();
+    });
+  });
+
+  app.on("window-all-closed", () => {
     fileWatcher?.stop();
     screenshotWatcher?.stop();
+    app.quit();
   });
-});
-
-app.on("window-all-closed", () => {
-  fileWatcher?.stop();
-  screenshotWatcher?.stop();
-  app.quit();
-});
-
-app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    mainWindow = createWindow();
-    setupAgent();
-  }
-});
+}

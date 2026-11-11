@@ -64,7 +64,19 @@ html, body {
   letter-spacing: 0.5px;
 }
 
-#settings-button {
+#header-buttons {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+#refresh-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+#settings-button,
+#refresh-button {
   -webkit-app-region: no-drag;
   background: none;
   border: none;
@@ -78,7 +90,8 @@ html, body {
   transition: color 0.2s, background 0.2s;
 }
 
-#settings-button:hover {
+#settings-button:hover,
+#refresh-button:hover {
   color: var(--text-gold);
   background: rgba(255, 255, 255, 0.05);
 }
@@ -654,11 +667,18 @@ html, body {
 }
 
 #oauth-flow-text {
+  white-space: pre-line;
   margin-bottom: 8px;
   line-height: 1.5;
 }
 
-#addon-section {
+#wow-path-status {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+#addon-section,
+#wow-path-section {
   display: flex;
   align-items: center;
   gap: 10px;

@@ -41,6 +41,8 @@ From the `app/` directory:
 npm install          # Install dependencies
 npm run build        # Compile TypeScript + copy renderer files
 npm run dev          # Build and launch Electron
+npm test             # Unit tests (node:test) against the compiled output
+npm run pack:win     # Unpacked Windows build into release/win-unpacked (works from WSL)
 npm run dist         # Package for distribution
 ```
 
@@ -53,17 +55,17 @@ Loaded via `dotenv` from `app/.env`:
 ```bash
 ANTHROPIC_API_KEY="sk-ant-..."           # Fallback if no provider configured in settings
 WOW_WTF_PATH="/path/to/WTF"              # Optional: override SavedVariables path
-WOW_AGENT_MODEL="claude-sonnet-4-5-..." # Optional: override AI model
+WOW_AGENT_MODEL="claude-sonnet-5-5"     # Optional: override AI model
 ```
 
-Provider config (API keys, OAuth tokens, model selection) is managed in the settings UI and persisted in `~/.wow-agent/settings.json`.
+Provider and model selection are managed in the settings UI and persisted in `~/.wow-agent/settings.json`. API keys and OAuth tokens are stored encrypted in `~/.wow-agent/credentials.enc`.
 
 ## Key Files
 
 **Addon** (`addon/WoWAgent/`):
 - `Core.lua` - Slash commands (`/agent sync`, `/agent ss`, `status`, `help`), event handlers, addon lifecycle
 - `StateCollector.lua` - WoW API calls to gather player/target/zone/party/gear data
-- `WoWAgent.toc` - Multi-version manifest (Interface: 11508, 20505, 50503, 120000)
+- `WoWAgent.toc` - Multi-version manifest (Interface: 11508, 16001, 20505, 50503, 120000)
 
 **App Main Process** (`app/src/main/`):
 - `agent.ts` - AI agent setup with multi-provider support, version-specific system prompts, zone auto-lookup
@@ -79,12 +81,22 @@ Provider config (API keys, OAuth tokens, model selection) is managed in the sett
 - Settings panel: AI provider/model selection, API key/OAuth auth, WoW version, addon install
 - Screenshot preview bar for attaching captured screenshots to messages
 
+## Security Model (keep it intact)
+
+- The renderer is sandboxed (`contextIsolation: true`, `sandbox: true`, `nodeIntegration: false`). It has no `require`; it talks to the main process only through `window.wowAgent` from `src/main/preload.cts`. A new IPC channel must be added to the allowlist in the preload and registered with the `handle`/`on` helpers in `index.ts`, which verify the sender.
+- The CSP in `index.html` forbids inline scripts and all network access. Do not loosen it; do not add `innerHTML` with unescaped content.
+- Secrets never go to the renderer or to `settings.json`. They live in `secure-store.ts` (Electron `safeStorage`, async API).
+- `tools/web-fetch.ts` enforces an https-only host allowlist, re-validated on every redirect, plus a private-address check. Tests in `test/web-fetch.test.mjs`.
+- File paths never cross IPC: screenshots are referred to by opaque ids resolved in the main process.
+- AI access uses `@earendil-works/pi-ai` (`builtinModels()` with our `CredentialStore`); the agent gets `streamFn: models.streamSimple`.
+
 ## Multi-Version Support
 
 The addon works across all WoW versions via a single TOC file. The app's `config.ts` maps version keys to folder paths:
 
 | Version | Interface | Folder |
 |---------|-----------|--------|
+| forever | 16001 | `_forever_` (falls back to `forever`, `_classic_beta_`) |
 | retail | 120000 | `_retail_` |
 | tbc_anniversary | 20505 | `_anniversary_` |
 | mop_classic | 50503 | `_classic_` |
