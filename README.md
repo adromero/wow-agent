@@ -96,6 +96,10 @@ Settings (version, provider, auth) persist across app restarts in `~/.wow-agent/
 - **In-game "Agent Sync" button**: left-click syncs (same as `/agent sync`, reloads the UI), right-click takes a screenshot for the app, drag to move it. `/agent button` hides or shows it.
 - **Refresh button in the app header**: re-reads the game state from disk on demand, for example after the app was started later than WoW or after you changed the WoW folder.
 
+### Playing fullscreen
+
+The app window floats above the game when WoW runs in **Fullscreen (Windowed)** mode, which is the fullscreen mode of current clients. Press **Ctrl+Alt+A** at any time to hide the window or bring it back. If the game is in a true exclusive fullscreen mode, no desktop window can draw over it; switch the game's Display Mode to Fullscreen (Windowed).
+
 ### What the AI can see
 
 Character (class, race, spec, talent points per tree, XP, money, hearthstone), target, zone and map coordinates, party, gear in every slot (item, item level, quality, durability), professions and skills, free bag slots, and the quest log (title, level, status, objectives and progress). Quests under a collapsed category in the in-game quest log are not exported.

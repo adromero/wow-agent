@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   dialog,
+  globalShortcut,
   ipcMain,
   nativeImage,
   session,
@@ -122,8 +123,34 @@ function createWindow(): BrowserWindow {
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-attach-webview", (event) => event.preventDefault());
 
+  // Stay above a game running in fullscreen-windowed (borderless) mode. The
+  // plain always-on-top level sits below such windows on Windows, and Windows
+  // can drop the topmost flag when a fullscreen window takes focus, so use the
+  // highest level and re-assert it whenever this window loses focus.
+  const keepOnTop = () => {
+    if (win.isDestroyed() || !win.isVisible()) return;
+    win.setAlwaysOnTop(true, "screen-saver");
+    win.moveTop();
+  };
+  keepOnTop();
+  win.on("blur", keepOnTop);
+  win.on("show", keepOnTop);
+
   win.loadFile(RENDERER_INDEX);
   return win;
+}
+
+/** Global hotkey: hide the overlay, or bring it back above the game without taking focus. */
+const TOGGLE_SHORTCUT = "Control+Alt+A";
+
+function toggleWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isVisible() && !mainWindow.isMinimized()) {
+    mainWindow.hide();
+  } else {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.showInactive(); // the "show" handler puts it back on top
+  }
 }
 
 // --- IPC helpers ---
@@ -697,6 +724,10 @@ if (!app.requestSingleInstanceLock()) {
 
     mainWindow = createWindow();
 
+    if (!globalShortcut.register(TOGGLE_SHORTCUT, toggleWindow)) {
+      console.warn(`[main] Could not register the ${TOGGLE_SHORTCUT} hotkey (already in use).`);
+    }
+
     setupIPC();
     setupFileWatcher();
     setupScreenshotWatcher();
@@ -708,6 +739,8 @@ if (!app.requestSingleInstanceLock()) {
       screenshotWatcher?.stop();
     });
   });
+
+  app.on("will-quit", () => globalShortcut.unregisterAll());
 
   app.on("window-all-closed", () => {
     fileWatcher?.stop();
