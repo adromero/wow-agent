@@ -75,6 +75,7 @@ Provider and model selection are managed in the settings UI and persisted in `~/
 - `config.ts` - WoW version registry, provider registry, path resolution, settings persistence
 - `tools/game-state.ts` - Tool allowing AI to query current game state
 - `tools/web-fetch.ts` - Tool allowing AI to fetch web pages (primarily Wowhead lookups)
+- `tools/wowhead.ts` - Parses the JSON tables and guide markup embedded in Wowhead pages into text (data only, never executed)
 
 **App Renderer** (`app/src/renderer/`):
 - Plain HTML/JS/CSS (no framework), communicates via Electron IPC
@@ -89,6 +90,10 @@ Provider and model selection are managed in the settings UI and persisted in `~/
 - `tools/web-fetch.ts` enforces an https-only host allowlist, re-validated on every redirect, plus a private-address check. Tests in `test/web-fetch.test.mjs`.
 - File paths never cross IPC: screenshots are referred to by opaque ids resolved in the main process.
 - AI access uses `@earendil-works/pi-ai` (`builtinModels()` with our `CredentialStore`); the agent gets `streamFn: models.streamSimple`.
+
+## Dependency notes
+
+- `overrides` in `app/package.json` pins `minimatch` to a patched release for `app-builder-lib` and `@electron/universal` (build tools only), while their older sub-dependencies keep the v3/v5 API they were written for. Re-check with `npm audit` and `npm ls minimatch` when upgrading electron-builder; remove the override once it is no longer needed.
 
 ## Multi-Version Support
 

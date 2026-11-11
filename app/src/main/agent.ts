@@ -44,6 +44,8 @@ This player is on WoW Forever (game client 1.60.x, interface 16001), which launc
 - WoW Forever is a recent release and is probably newer than your training data. Do not assume that Classic Era, Season of Discovery or Retail facts apply to it.
 - Treat anything you remember about classes, talents, items, quests, level ranges and raids as unverified for this version. Look it up on Wowhead's Forever section before giving specifics, and say so plainly when you could not confirm something.
 - The game state reports the player's actual level, talent trees, quests and gear: prefer that over assumptions.
+- Wowhead's Forever search pages return tables of matching zones, quests, NPCs, items and guides, with levels and links: start lookups there. Guide pages can be fetched too.
+- Wowhead often refuses its individual Forever database pages (zone=, quest=, item=, npc=) to automated readers with an HTTP 403. When that happens, rely on the search tables and guides, or fetch the same page under https://www.wowhead.com/classic/ as an approximation and tell the player it is Classic Era data that may differ in Forever.
 - Wowhead: ${WOWHEAD_BASE.forever} (use for zone/boss/item/quest lookups, search via ${WOWHEAD_BASE.forever}/search?q=QUERY)`,
 
   retail: `
@@ -162,7 +164,7 @@ export function formatZoneLookupPrompt(
   const gameContext = formatGameContext(db);
   const wowhead = getWowheadBase(versionId);
   const searchUrl = `${wowhead}/search?q=${encodeURIComponent(newZone)}`;
-  return `${gameContext}\n\n[Zone Update] The player moved from ${previousZone} to ${newZone}. Use web_fetch to look up this zone on wowhead (${searchUrl}) and share a brief overview — key content, level range, notable quests or dungeons, and any tips relevant to the player's class and level.`;
+  return `${gameContext}\n\n[Zone Update] The player moved from ${previousZone} to ${newZone}. Use web_fetch to look up this zone on wowhead (${searchUrl}) and share a brief overview — key content, level range, notable quests or dungeons, and any tips relevant to the player's class and level. The search page lists matching zones, quests, NPCs and guides; if a page is refused, work from those lists rather than retrying.`;
 }
 
 export function createAgent(

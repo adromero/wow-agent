@@ -115,6 +115,7 @@ Character (class, race, spec, talent points per tree, XP, money, hearthstone), t
 - **Sandboxed window.** The chat window runs with `contextIsolation`, `sandbox` and no Node integration. It can only call a fixed list of IPC channels through `src/main/preload.cts`, the page's Content-Security-Policy allows no inline scripts and no network access, navigation and new windows are blocked, and the main process ignores IPC that does not come from its own page.
 - **Encrypted credentials.** API keys and login tokens are stored in `~/.wow-agent/credentials.enc`, encrypted with the operating system's user-bound encryption (DPAPI on Windows, Keychain on macOS, the desktop keyring on Linux). If that is unavailable, credentials are kept in memory for the session and never written in plain text. Keys left in `settings.json` by older versions are moved on first start.
 - **Restricted `web_fetch`.** The AI can only fetch `https` pages on `wowhead.com`, `warcraft.wiki.gg`, `icy-veins.com` and `worldofwarcraft.blizzard.com` (and their subdomains). Every redirect hop is re-checked, hosts must resolve to public addresses (no localhost, LAN or tailnet), and responses are size-capped. To allow another site, add it to `extraAllowedHosts` in `~/.wow-agent/settings.json`.
+- **Wowhead pages are read as data.** Wowhead builds its search results, zone tables and guide bodies in the browser from JSON inside the page. `tools/wowhead.ts` parses that JSON (it is never executed) into plain text so the AI sees the results, levels, links and guide text. Wowhead refuses its individual WoW Forever database pages (`zone=`, `quest=`, `item=`, `npc=`) to automated readers with HTTP 403; the app does not try to get around that, and the AI is told to use search tables, guides, or the Classic Era page as a labelled approximation.
 - **Screenshots only.** The window refers to screenshots by an opaque id; the main process only reads image files that its own watcher found in the WoW `Screenshots` folder.
 - **Build it yourself.** Releases are not code-signed. `npm run pack:win` builds an unpacked Windows app into `app/release/win-unpacked` (this also works from WSL or Linux).
 - **Subscription logins.** The app still offers OAuth logins for some providers. Check the provider's terms before using a consumer subscription in a third-party app; an API key is the safe choice.
@@ -132,7 +133,7 @@ npm run dev
 # Build only
 npm run build
 
-# Run the tests (URL allowlist, SavedVariables parser, game-state output)
+# Run the tests (URL allowlist, Wowhead extraction, SavedVariables parser, game-state output)
 npm test
 
 # Unpacked Windows build (works from WSL/Linux too)
@@ -165,7 +166,8 @@ app/                     # Electron Desktop App (ESM)
     preload.cts          # The only bridge between the sandboxed window and the main process
     tools/               # Agent tools
       game-state.ts      # Read game state from SavedVariables
-      web-fetch.ts       # Fetch web pages (Wowhead lookups)
+      web-fetch.ts       # Fetch web pages (Wowhead lookups), allowlist and redirect checks
+      wowhead.ts         # Turn Wowhead's embedded tables and guide markup into text
       index.ts           # Tool registry
   src/renderer/          # Renderer (browser context)
     index.html           # Chat UI with settings (provider, auth, addon install)

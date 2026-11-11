@@ -1,6 +1,7 @@
 import * as dns from "dns/promises";
 import * as net from "net";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { formatWowheadData, formatWowheadGuide, isWowheadHost } from "./wowhead.js";
 
 /** Sites the model may read. A host matches if it equals an entry or is a subdomain of one. */
 export const DEFAULT_ALLOWED_HOSTS = [
@@ -13,6 +14,8 @@ export const DEFAULT_ALLOWED_HOSTS = [
 const MAX_REDIRECTS = 5;
 const MAX_BYTES = 3 * 1024 * 1024;
 const MAX_TEXT_LENGTH = 20000;
+const MAX_TABLES_LENGTH = 12000;
+const MAX_GUIDE_LENGTH = 16000;
 const TIMEOUT_MS = 15000;
 
 const webFetchParameters = {
@@ -199,6 +202,11 @@ export async function fetchAllowed(
 
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
+      if (response.status === 403) {
+        throw new Error(
+          "HTTP 403: this site refused the page to automated readers. Do not retry the same URL; use a search page or a guide page instead.",
+        );
+      }
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
@@ -209,10 +217,31 @@ export async function fetchAllowed(
     }
 
     const body = await readCapped(response);
-    let text = /html/i.test(contentType) ? htmlToText(body) : body.trim();
-    if (text.length > MAX_TEXT_LENGTH) {
-      text = text.slice(0, MAX_TEXT_LENGTH) + "\n\n[Content truncated]";
+    const isHtml = /html/i.test(contentType);
+    let text = isHtml ? htmlToText(body) : body.trim();
+
+    // Wowhead keeps its result tables as JSON inside the page; add them as text.
+    // A guide's body is stored the same way; when present it takes most of the budget.
+    const onWowhead = isHtml && isWowheadHost(url.hostname);
+    let tables = "";
+    if (onWowhead) {
+      let guide = formatWowheadGuide(body);
+      if (guide.length > MAX_GUIDE_LENGTH) {
+        guide = guide.slice(0, MAX_GUIDE_LENGTH) + "\n[Guide truncated]";
+      }
+      let lists = formatWowheadData(body, url.toString());
+      const listRoom = guide ? MAX_TABLES_LENGTH / 4 : MAX_TABLES_LENGTH;
+      if (lists.length > listRoom) {
+        lists = lists.slice(0, listRoom) + "\n[Tables truncated]";
+      }
+      tables = [guide, lists].filter(Boolean).join("\n\n");
     }
+
+    const room = MAX_TEXT_LENGTH - tables.length;
+    if (text.length > room) {
+      text = text.slice(0, room) + "\n\n[Content truncated]";
+    }
+    if (tables) text = `${text}\n\n${tables}`;
     return { text, finalUrl: url.toString() };
   }
   throw new Error("Too many redirects.");
