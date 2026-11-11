@@ -96,6 +96,15 @@ Settings (version, provider, auth) persist across app restarts in `~/.wow-agent/
 - **In-game "Agent Sync" button**: left-click syncs (same as `/agent sync`, reloads the UI), right-click takes a screenshot for the app, drag to move it. `/agent button` hides or shows it.
 - **Refresh button in the app header**: re-reads the game state from disk on demand, for example after the app was started later than WoW or after you changed the WoW folder.
 
+### Memory
+
+The assistant remembers things per character (and per WoW version):
+
+- **Notes.** When you tell it something that will matter later (goals, plans, preferences, how you like answers), it saves a short note with its `remember` tool and says so. Notes are loaded into every new chat. Ask it to forget something, or open Settings > Memory to delete single notes or all of them.
+- **Last conversation.** The chat is saved after each reply and restored when the app starts or when you sync a different character. Only the text of your messages and the replies is kept (no screenshots, web pages or tool output), up to the last 40 messages. Settings > Memory > Clear chat starts over.
+
+Memory lives in plain JSON files under `~/.wow-agent/memory/<version>/<character>/` (`notes.json`, `history.json`), readable only by your user. It is sent nowhere except to your AI provider as part of your chats. It is not encrypted, so do not tell the assistant secrets.
+
 ### Playing fullscreen
 
 The app window floats above the game when WoW runs in **Fullscreen (Windowed)** mode, which is the fullscreen mode of current clients. Press **Ctrl+Alt+A** at any time to hide the window or bring it back. If the game is in a true exclusive fullscreen mode, no desktop window can draw over it; switch the game's Display Mode to Fullscreen (Windowed).
@@ -124,7 +133,7 @@ Character (class, race, spec, talent points per tree, XP, money, hearthstone), t
 - **Build it yourself.** Releases are not code-signed. `npm run pack:win` builds an unpacked Windows app into `app/release/win-unpacked` (this also works from WSL or Linux).
 - **Subscription logins.** The app still offers OAuth logins for some providers. Check the provider's terms before using a consumer subscription in a third-party app; an API key is the safe choice.
 
-Known limits: a page on an allowed site can still contain text that tries to steer the AI (the system prompt tells it to treat pages as reference only), and the DNS check runs just before the request rather than being pinned to the connection.
+Known limits: saved notes are loaded into every future chat, so a note is a place where a steering attempt could persist; the AI is told never to save content from web pages and to treat notes as background rather than instructions, and you can review and delete notes in Settings > Memory. Also, a page on an allowed site can still contain text that tries to steer the AI (the system prompt tells it to treat pages as reference only), and the DNS check runs just before the request rather than being pinned to the connection.
 
 ## Development
 
@@ -137,7 +146,7 @@ npm run dev
 # Build only
 npm run build
 
-# Run the tests (URL allowlist, Wowhead extraction, SavedVariables parser, game-state output)
+# Run the tests (URL allowlist, Wowhead extraction, SavedVariables parser, game-state output, memory)
 npm test
 
 # Unpacked Windows build (works from WSL/Linux too)
@@ -167,11 +176,13 @@ app/                     # Electron Desktop App (ESM)
     screenshot-watcher.ts # Watch for new screenshots in WoW Screenshots dir
     config.ts            # App configuration, WoW version registry, provider registry
     secure-store.ts      # Encrypted credential store (safeStorage)
+    memory-store.ts      # Per-character notes and saved conversation
     preload.cts          # The only bridge between the sandboxed window and the main process
     tools/               # Agent tools
       game-state.ts      # Read game state from SavedVariables
       web-fetch.ts       # Fetch web pages (Wowhead lookups), allowlist and redirect checks
       wowhead.ts         # Turn Wowhead's embedded tables and guide markup into text
+      memory.ts          # remember / forget tools
       index.ts           # Tool registry
   src/renderer/          # Renderer (browser context)
     index.html           # Chat UI with settings (provider, auth, addon install)

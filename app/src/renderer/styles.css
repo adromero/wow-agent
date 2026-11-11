@@ -687,3 +687,56 @@ html, body {
 .hidden {
   display: none !important;
 }
+
+/* Memory section */
+#memory-character {
+  color: var(--text-muted);
+  font-weight: normal;
+}
+
+#memory-list {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+#memory-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 0;
+  font-size: 12px;
+  line-height: 1.4;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+#memory-list li span {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+#memory-list li.empty {
+  color: var(--text-muted);
+  border-bottom: none;
+}
+
+#memory-list button {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+}
+
+#memory-list button:hover {
+  color: #e06c75;
+}
+
+#memory-actions {
+  display: flex;
+  gap: 8px;
+}

@@ -51,6 +51,8 @@ app.on("browser-window-created", (_e, win) => {
         for (let i = 0; i < 100 && !events.some((e) => e.startsWith("error") || e === "agent_end"); i++) await new Promise((r) => setTimeout(r, 250));
         await new Promise((r) => setTimeout(r, 500));
         out.events = events;
+        out.memory = await window.wowAgent.invoke("get-memory");
+        out.conversation = await window.wowAgent.invoke("get-conversation");
         out.messages = [...document.querySelectorAll("#messages .message")].map((m) => m.className + " => " + m.textContent.trim().replace(/\\s+/g, " ").slice(0, 200) + (m.querySelector("img") ? " [thumbnail]" : ""));
         out.inputEnabled = !document.getElementById("message-input").disabled;
         return out;
@@ -59,8 +61,9 @@ app.on("browser-window-created", (_e, win) => {
       result = { error: String(err) };
     }
     const onDisk = {};
-    for (const f of fs.readdirSync(settingsDir)) {
+    for (const f of fs.readdirSync(settingsDir, { recursive: true })) {
       const file = path.join(settingsDir, f);
+      if (!fs.statSync(file).isFile()) continue;
       const text = fs.readFileSync(file, "latin1");
       onDisk[f] = {
         mode: (fs.statSync(file).mode & 0o777).toString(8),

@@ -112,6 +112,10 @@ const addonInstallBtn = document.getElementById("addon-install-btn");
 const refreshButton = document.getElementById("refresh-button");
 const wowPathStatus = document.getElementById("wow-path-status");
 const wowPathBtn = document.getElementById("wow-path-btn");
+const memoryCharacter = document.getElementById("memory-character");
+const memoryList = document.getElementById("memory-list");
+const memoryClearNotes = document.getElementById("memory-clear-notes");
+const memoryClearChat = document.getElementById("memory-clear-chat");
 
 let providers = [];
 let currentConfig = null;
@@ -280,7 +284,74 @@ function openSettings() {
   settingsOverlay.classList.remove("hidden");
   checkAddonStatus();
   refreshWowPathStatus();
+  refreshMemory();
 }
+
+// --- Memory ---
+
+function showMemory(memory) {
+  if (!memory) return;
+  memoryCharacter.textContent = `- ${memory.character}`;
+  memoryList.replaceChildren();
+  if (memory.notes.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "No notes yet. The assistant saves notes as you tell it your goals and preferences.";
+    memoryList.appendChild(empty);
+  }
+  for (const note of memory.notes) {
+    const item = document.createElement("li");
+    const text = document.createElement("span");
+    text.textContent = note.text;
+    const remove = document.createElement("button");
+    remove.textContent = "\u00d7";
+    remove.title = "Forget this note";
+    remove.addEventListener("click", async () => {
+      showMemory(await ipcRenderer.invoke("delete-memory-note", note.id));
+    });
+    item.appendChild(text);
+    item.appendChild(remove);
+    memoryList.appendChild(item);
+  }
+  memoryClearNotes.disabled = memory.notes.length === 0;
+}
+
+async function refreshMemory() {
+  try {
+    showMemory(await ipcRenderer.invoke("get-memory"));
+  } catch {
+    memoryCharacter.textContent = "";
+  }
+}
+
+memoryClearNotes.addEventListener("click", async () => {
+  showMemory(await ipcRenderer.invoke("clear-memory-notes"));
+});
+
+memoryClearChat.addEventListener("click", () => {
+  ipcRenderer.send("clear-conversation");
+});
+
+/** Replace the chat with a saved conversation (on start, character switch or clear). */
+function showConversation(conversation) {
+  messagesContainer.replaceChildren();
+  endStreamingMessage();
+  hideThinking();
+  setInputEnabled(true);
+  if (!conversation || conversation.messages.length === 0) {
+    addMessage("system", "Welcome to WoW Agent! Click the Agent Sync button in-game (or type /agent sync) to share your game state, then ask me anything about WoW.");
+    return;
+  }
+  for (const message of conversation.messages) {
+    addMessage(message.role, message.text);
+  }
+  addMessage("system", `Restored your last conversation for ${conversation.character}.`);
+}
+
+ipcRenderer.on("conversation-loaded", (_event, conversation) => {
+  showConversation(conversation);
+  refreshMemory();
+});
 
 // --- WoW folder ---
 
@@ -620,6 +691,7 @@ ipcRenderer.on("agent-event", (_event, data) => {
 
     case "tool_end":
       hideThinking();
+      if (data.toolName === "remember" || data.toolName === "forget") refreshMemory();
       break;
 
     case "error":
@@ -645,7 +717,7 @@ ipcRenderer.on("zone-lookup", (_event, data) => {
 ipcRenderer.on("version-changed", (_event, data) => {
   versionLabel.textContent = data.label;
   versionSelect.value = data.id;
-  addMessage("system", `Switched to ${data.label}. Conversation cleared.`);
+  // The main process follows up with conversation-loaded for that version.
 });
 
 // --- Screenshot handling ---
@@ -708,6 +780,10 @@ sendButton.addEventListener("click", sendMessage);
     if (current) {
       versionLabel.textContent = current.label;
     }
+
+    // Restore the last conversation for the current character
+    const conversation = await ipcRenderer.invoke("get-conversation");
+    if (conversation.messages.length > 0) showConversation(conversation);
 
     // Game state
     if (data) {

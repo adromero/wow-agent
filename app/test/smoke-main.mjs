@@ -14,6 +14,8 @@ app.on("browser-window-created", (_e, win) => {
     let result;
     try {
       result = await win.webContents.executeJavaScript(`(async () => {
+        document.getElementById("settings-button").click();
+        await new Promise((r) => setTimeout(r, 300));
         const blocked = await window.wowAgent.invoke("evil-channel").then(() => "allowed", () => "blocked");
         let inlineRan = false;
         const s = document.createElement("script");
@@ -34,6 +36,9 @@ app.on("browser-window-created", (_e, win) => {
           wowPath: await window.wowAgent.invoke("get-wow-path"),
           refresh: (await window.wowAgent.invoke("refresh-game-state")).found,
           badThumb: await window.wowAgent.invoke("get-screenshot-thumbnail", "../../etc/passwd"),
+          memory: await window.wowAgent.invoke("get-memory"),
+          conversation: await window.wowAgent.invoke("get-conversation"),
+          memoryRows: document.querySelectorAll("#memory-list li").length,
           blockedChannel: blocked,
           inlineScriptRan: inlineRan,
           versionOptions: document.getElementById("version-select").options.length,

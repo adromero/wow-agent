@@ -75,6 +75,7 @@ Provider and model selection are managed in the settings UI and persisted in `~/
 - `config.ts` - WoW version registry, provider registry, path resolution, settings persistence
 - `tools/game-state.ts` - Tool allowing AI to query current game state
 - `tools/web-fetch.ts` - Tool allowing AI to fetch web pages (primarily Wowhead lookups)
+- `memory-store.ts` - Per-character memory under `~/.wow-agent/memory/<version>/<character>/`: `notes.json` (saved by the AI's `remember`/`forget` tools in `tools/memory.ts`, loaded into the system prompt) and `history.json` (compact user/assistant text transcript, restored into the agent on start or character switch). `index.ts` rebuilds the agent when the synced character changes.
 - `tools/wowhead.ts` - Parses the JSON tables and guide markup embedded in Wowhead pages into text (data only, never executed)
 
 **App Renderer** (`app/src/renderer/`):

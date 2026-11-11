@@ -20,6 +20,10 @@ const INVOKE_CHANNELS = [
   "get-wow-path",
   "choose-wow-path",
   "get-screenshot-thumbnail",
+  "get-conversation",
+  "get-memory",
+  "delete-memory-note",
+  "clear-memory-notes",
 ] as const;
 
 const SEND_CHANNELS = [
@@ -40,6 +44,7 @@ const EVENT_CHANNELS = [
   "oauth-prompt",
   "oauth-prompt-cancel",
   "oauth-progress",
+  "conversation-loaded",
 ] as const;
 
 contextBridge.exposeInMainWorld("wowAgent", {

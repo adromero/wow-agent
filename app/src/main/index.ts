@@ -49,6 +49,18 @@ import {
   initModels,
 } from "./agent.js";
 import { DEFAULT_ALLOWED_HOSTS } from "./tools/web-fetch.js";
+import {
+  clearNotes,
+  clearTranscript,
+  loadNotes,
+  loadTranscript,
+  removeNote,
+  sameScope,
+  saveTranscript,
+  scopeFor,
+  toDisplay,
+  type MemoryScope,
+} from "./memory-store.js";
 import type { WoWAgentDB } from "./lua-reader.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -73,6 +85,26 @@ let lastZoneName: string | null = null;
 let isAgentBusy = false;
 
 const credentialStore = new SecureCredentialStore();
+
+/**
+ * Lets "Clear chat" stop the agent being replaced from saving its transcript
+ * again when it is aborted.
+ */
+let currentSaveGuard = { discard: false };
+
+/** Which character's memory the current agent was created with. */
+let currentScope: MemoryScope = scopeFor(currentVersionId, null);
+
+function describeConversation() {
+  return { character: currentScope.label, messages: toDisplay(loadTranscript(currentScope)) };
+}
+
+function describeMemory() {
+  return {
+    character: currentScope.label,
+    notes: loadNotes(currentScope).map((n) => ({ id: n.id, text: n.text, created: n.created })),
+  };
+}
 
 /** Screenshots the watcher has reported, by opaque id. The renderer never sees a file path. */
 const screenshots = new Map<string, string>();
@@ -333,8 +365,28 @@ function setupIPC(): void {
   });
 
   on("clear-conversation", () => {
-    agent?.abort();
-    agent?.reset();
+    currentSaveGuard.discard = true;
+    clearTranscript(currentScope);
+    setupAgent(); // fresh agent: empty chat, current notes
+    sendToRenderer("conversation-loaded", describeConversation());
+  });
+
+  // --- Memory ---
+
+  handle("get-conversation", () => describeConversation());
+
+  handle("get-memory", () => describeMemory());
+
+  handle("delete-memory-note", (id) => {
+    if (typeof id === "string") removeNote(currentScope, id);
+    refreshAgentMemory();
+    return describeMemory();
+  });
+
+  handle("clear-memory-notes", () => {
+    clearNotes(currentScope);
+    refreshAgentMemory();
+    return describeMemory();
   });
 
   // --- Version management ---
@@ -352,10 +404,11 @@ function setupIPC(): void {
     currentVersionId = versionId;
     saveSelectedVersion(versionId);
     restartWatchers();
-    setupAgent(); // new system prompt
+    setupAgent(); // new system prompt, and that version's memory
 
     const version = getWowVersion(versionId)!;
     sendToRenderer("version-changed", { id: version.id, label: version.label });
+    sendToRenderer("conversation-loaded", describeConversation());
   });
 
   // --- WoW install location ---
@@ -614,6 +667,13 @@ function setupFileWatcher(): void {
     console.log("[main] Game state updated from SavedVariables");
     sendToRenderer("game-state-update", data);
 
+    // A different character has its own notes and conversation.
+    if (agent && !sameScope(currentScope, scopeFor(currentVersionId, data))) {
+      lastZoneName = null; // do not treat the switch as a zone change
+      setupAgent();
+      sendToRenderer("conversation-loaded", describeConversation());
+    }
+
     // Detect zone changes and auto-prompt the agent
     const zone = data.game_state?.zone;
     const newZone =
@@ -680,6 +740,13 @@ function setupAgent(): void {
   agent?.abort();
   isAgentBusy = false;
 
+  // The conversation is saved under the character it was held with, even if
+  // another character is synced before a reply finishes.
+  const scope = scopeFor(currentVersionId, fileWatcher?.getLastData() || null);
+  currentScope = scope;
+  const saveGuard = { discard: false };
+  currentSaveGuard = saveGuard;
+
   try {
     agent = createAgent(
       mainWindow,
@@ -687,11 +754,24 @@ function setupAgent(): void {
       currentVersionId,
       currentProviderConfig,
       getAllowedHosts,
+      scope,
+      (messages) => {
+        if (!saveGuard.discard) saveTranscript(scope, messages);
+      },
     );
   } catch (err: any) {
     agent = null;
     console.error("[main] Could not create agent:", err?.message);
   }
+}
+
+/**
+ * After notes were edited in Settings, rebuild the agent so its system prompt
+ * matches. The chat continues from the saved transcript. Skipped while a reply
+ * is in progress; the next rebuild picks the change up.
+ */
+function refreshAgentMemory(): void {
+  if (!isAgentBusy) setupAgent();
 }
 
 // --- App lifecycle ---
